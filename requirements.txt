@@ -1,0 +1,3 @@
+modnet>=0.18
+seaborn
+matplotlib
