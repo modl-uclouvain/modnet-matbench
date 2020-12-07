@@ -2,17 +2,59 @@
 
 ## Interim results
 
-| Dataset   | Structure? |    Best result (MODNet)      | Dataset size |
-|:----------|:----------:|-----------------------------:|-------------:|
-| steels    |      x     | 95.2 [Automatminer] (120)    |      312     |
-| JDFT2D    |            | 38.6 [Automatminer] (32.7)   |      636     |
-| PhDOS     |            | 36.9 [MEGNet] (38.7)         |     1265     |
-| Band gap  |      x     | 0.42 [Automatminer] (0.37)   |     4604     |
-| *n*       |            | 0.30 [Automatminer] (0.31)      |     4764     |
-| log G     |            | 0.085 [Automatminer] (-)     |   10987      |
-| log K     |            | 0.085 [Automatminer] (-)     |   10987      |
+<table>
+<tr>
+  <th>Dataset</th>
+  <th>Structure?</th>
+  <th>Leading result (MODNet)</th>
+  <th>Dataset size</th>
+</tr>
+<tr>
+  <td>steels</td>
+  <td>no</td>
+  <td style="backgruond-color: LightRed;">95.2 [Automatminer] (120)</td>
+  <td>312</td>
+</tr>
+<tr>
+  <td>JDFT2D</td>
+  <td> </td>
+  <td style="background-color: LightGreen">38.6 [Automatminer] (32.7)</td>
+  <td>636</td>
+</tr>
+<tr>
+  <td>PhDOS</td>
+  <td> </td>
+  <td style="background-color: LightBlue;">36.9 [MEGNet] (38.7)</td>
+  <td>1265</td>
+</tr>
+<tr>
+  <td>Expt. band gap</td>
+  <td>no</td>
+  <td style="background-color: LightGreen;">0.42 [Automatminer] (0.37)</td>
+  <td>4604</td>
+</tr>
+<tr>
+  <td><i>n</i></td>
+  <td> </td>
+  <td style="background-color: LightBlue;">0.30 [Automatminer] (0.31)</td>
+  <td>4764</td>
+</tr>
+<tr>
+  <td>log G</td>
+  <td> </td>
+  <td style="background-color: LightGrey;">0.085 [Automatminer] (-)</td>
+  <td>10987</td>
+</tr>
+<tr>
+  <td>log K</td>
+  <td> </td>
+  <td style="background-color: LightGrey;">0.068 [Automatminer] (-)</td>
+  <td>10987</td>
+</tr>
+</table>
 
-## To-discuss
+
+## To discuss
 
 - Feature selection inside NCV, 
     - Will be expensive, so could also just subsample
