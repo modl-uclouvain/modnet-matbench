@@ -6,9 +6,9 @@
 |:----------|:----------:|-----------------------------:|-------------:|
 | steels    |      x     | 95.2 [Automatminer] (120)    |      312     |
 | JDFT2D    |            | 38.6 [Automatminer] (32.7)   |      636     |
-| PhDOS     |            | 36.9 [MEGNet] (41.7)         |     1265     |
+| PhDOS     |            | 36.9 [MEGNet] (38.7)         |     1265     |
 | Band gap  |      x     | 0.42 [Automatminer] (0.37)   |     4604     |
-| *n*       |            | 0.30 [Automatminer] (-)      |     4764     |
+| *n*       |            | 0.30 [Automatminer] (0.31)      |     4764     |
 | log G     |            | 0.085 [Automatminer] (-)     |   10987      |
 | log K     |            | 0.085 [Automatminer] (-)     |   10987      |
 
