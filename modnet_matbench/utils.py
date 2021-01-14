@@ -8,10 +8,11 @@ MATBENCH_SEED = 18012019
 from traceback import print_exc
 
 import numpy as np
+from modnet.preprocessing import MODData
 from modnet.models import MODNetModel
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import OneHotEncoder
-
+import os
 
 def plot_benchmark(model, data, val_data):
     import seaborn as sns
@@ -64,7 +65,9 @@ def learning_callbacks(verbose=False):
     ]
 
 
-def matbench_benchmark(data, target, weights, fit_settings,classification=False,multi=False,save_folds=False):
+def matbench_benchmark(data, target, weights, fit_settings,
+                       classification=False, multi=False, save_folds=False,
+                       hp_optimization=True, inner_feat_selection=True):
 
     all_models = [] 
     all_predictions = []
@@ -77,7 +80,14 @@ def matbench_benchmark(data, target, weights, fit_settings,classification=False,
     
     for ind, (train, test) in enumerate(matbench_kfold_splits(data)):
         train_data, test_data = data.split((train, test))
-        
+        if inner_feat_selection:
+            # the training data is featurized and saved
+            path = "folds/train_moddata_f{}".format(ind+1)
+            if os.path.isfile(path):
+                train_data = MODData.load(path)
+            else:
+                train_data.feature_selection(n=-1,use_precomputed_cross_nmi=True)
+                train_data.save(path)
         
         if classification:
             model = MODNetModel(target, weights, n_feat=fit_settings["n_feat"],
@@ -85,12 +95,17 @@ def matbench_benchmark(data, target, weights, fit_settings,classification=False,
         else:
             model = MODNetModel(target, weights, n_feat=fit_settings["n_feat"],
                             num_neurons=fit_settings["num_neurons"], act = fit_settings['act'])
-
-        if fit_settings["increase_bs"]:
-            model.fit(train_data, lr = fit_settings['lr'], epochs = fit_settings["epochs"], batch_size=fit_settings["batch_size"], loss = 'mse')
-            model.fit(train_data, lr = fit_settings['lr']/7, epochs = fit_settings["epochs"]//2, batch_size=fit_settings["batch_size"]*2, loss = fit_settings['loss'])
+            
+            
+        if hp_optimization:
+            model.fit_preset(train_data)
         else:
-            model.fit(train_data, callbacks=learning_callbacks(), **fit_settings)
+            if fit_settings["increase_bs"]:
+                model.fit(train_data, lr = fit_settings['lr'], epochs = fit_settings["epochs"], batch_size=fit_settings["batch_size"], loss = 'mse')
+                model.fit(train_data, lr = fit_settings['lr']/7, epochs = fit_settings["epochs"]//2, batch_size=fit_settings["batch_size"]*2, loss = fit_settings['loss'])
+            else:
+                #model.fit(train_data, callbacks=learning_callbacks(), **fit_settings)
+                model.fit(train_data, **fit_settings)
 
         try:
             if classification:
