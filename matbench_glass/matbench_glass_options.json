@@ -1,0 +1,11 @@
+{
+    "units": "",
+    "target_names": ["glass-forming ability"],
+    "classification": true,
+    "num_classes": 2,
+    "other_methods": [{
+        "AM": 0.861,
+        "RF": 0.858,
+        "Dummy": 0.499
+    }]
+}

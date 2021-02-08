@@ -1,0 +1,20 @@
+{
+    "units": "$\\log_{10}\\mathrm{GPa}$",
+    "target_names": ["$\\log_{10} K$", "$\\log_{10} G$"],
+    "other_methods": [
+        {
+            "AM": 0.0849,
+            "RF": 0.104,
+            "CGCNN": 0.0895,
+            "MEGNet": 0.0914,
+            "Dummy": 0.293
+        },
+        {
+            "AM": 0.0679,
+            "RF": 0.081,
+            "CGCNN": 0.0712,
+            "MEGNet": 0.0712,
+            "Dummy": 0.289
+        }
+    ]
+}

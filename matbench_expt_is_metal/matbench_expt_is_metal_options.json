@@ -1,0 +1,11 @@
+{
+    "units": "",
+    "target_names": ["metallicity"],
+    "classification": true,
+    "num_classes": 2,
+    "other_methods": [{
+        "AM": 0.920, 
+        "RF": 0.917, 
+        "Dummy": 0.495
+    }]
+}
