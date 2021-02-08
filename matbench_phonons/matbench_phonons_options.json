@@ -1,0 +1,13 @@
+{
+    "units": "1/cm",
+    "target_names": ["largest frequency in phonon DOS"],
+    "other_methods": [
+        {
+            "AM": 50.8,
+            "RF": 68,
+            "CGCNN": 57.8,
+            "MEGNet": 36.9,
+            "Dummy": 324
+        }
+    ]
+}

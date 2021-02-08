@@ -1,0 +1,11 @@
+{
+    "units": "MPa",
+    "target_names": ["yield strength"],
+    "other_methods": [
+        {
+            "AM": 95.2,
+            "RF": 104,
+            "Dummy": 230
+        }
+    ]
+}

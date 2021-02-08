@@ -1,0 +1,13 @@
+{
+    "units": "eV/atom",
+    "target_names": ["exfoliation energy"],
+    "other_methods": [
+        {
+            "AM": 38.6,
+            "RF": 49.9,
+            "CGCNN": 49.2,
+            "MEGNet": 55.9,
+            "Dummy": 67.3
+        }
+    ]
+}

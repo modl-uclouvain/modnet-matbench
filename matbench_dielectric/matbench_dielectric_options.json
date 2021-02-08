@@ -1,0 +1,12 @@
+{
+    "target_names": ["refractive index"],
+    "other_methods": [{
+        "AM": 0.299, 
+        "RF": 0.421, 
+        "CGCNN": 0.599, 
+        "MEGNet": 0.478, 
+        "Dummy": 0.809
+    }],
+    "display_name": "Refractive index",
+    "n": 4764
+}
