@@ -68,14 +68,19 @@ def featurize(task):
 
     df = load_dataset(task)
 
-    target = [
+    targets = [
         col for col in df.columns if col not in ("id", "structure", "composition")
     ][0]
 
+    try:
+        materials = df["structure"] if "structure" in df.columns else df["composition"]
+    except KeyError:
+        raise RuntimeError(f"Could not find any materials data dataset for task {task!r}!")
+
     data = MODData(
-        structures=df["structure"].tolist(),
-        targets=df[target].tolist(),
-        target_names=[target],
+        structures=materials.tolist(),
+        targets=df[targets].tolist(),
+        target_names=[targets],
     )
     data.featurize(n_jobs=4)
     data.save(f"./precomputed/{task}_moddata.pkl.gz")
@@ -172,7 +177,6 @@ def analyse_results(results, settings):
     all_errors = []
 
     for name in target_names:
-        # import pdb; pdb.set_trace()
         targets = np.hstack([res[name].values for res in results["targets"]]).flatten()
         if settings.get("classification"):
             if len(target_names) > 1:
