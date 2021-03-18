@@ -7,6 +7,10 @@ from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
 from sklearn.metrics.pairwise import euclidean_distances
 from scipy.stats import pearsonr
+import seaborn as sns
+
+plt.rcParams['xtick.labelsize']=8
+plt.rcParams['ytick.labelsize']=8
 
 class error_analysis:
     
@@ -134,13 +138,14 @@ class error_analysis:
             mae = np.mean(errs)
             ax.text(0.6,0.8,'MAE: {:.2f}'.format(mae),transform=ax.transAxes,fontsize=14)
 
-            ax.set_xlabel('PCA euclidean distance')
+            ax.set_xlabel('Euclidean PCA distance')
             ax.set_ylabel('Absolute error')
             if xmax is not None:
                 ax.set_xlim(0,xmax)
             if ymax is not None:
                 ax.set_ylim(0,ymax)
         return fig, axs
+    
     
     def plot_feat_distance(self, n_neighbours = 5, n_feat = 50, scaling= 'mm', abs_v=True, xmax=None, ymax=None):
         
@@ -189,10 +194,93 @@ class error_analysis:
             mae = np.mean(errs)
             ax.text(0.6,0.8,'MAE: {:.2f}'.format(mae),transform=ax.transAxes,fontsize=14)
 
-            ax.set_xlabel('PCA euclidean distance')
+            ax.set_xlabel('Euclidean feature distance')
             ax.set_ylabel('Absolute error')
             if xmax is not None:
                 ax.set_xlim(0,xmax)
             if ymax is not None:
                 ax.set_ylim(0,ymax)
         return fig, axs
+    
+    def upper_bound(self,distances,errors,threshold=0.9):
+        coeffs = errors/distances
+        return np.sort(coeffs)[int(len(distances)*threshold)]
+    
+    def plot_feat_distance_all(self, ax=None, name='', upper_bound=1, n_neighbours = 5,
+                               n_feat = 50, scaling= 'mm', abs_v=True, xmax=None, ymax=None, jointplot=False):
+
+        if scaling == 'mm':
+            xd_train = self.x_train_scmm
+            xd_test = self.x_test_scmm
+        else:
+            xd_train = self.x_train_sc
+            xd_test = self.x_test_sc
+
+        all_closest = []
+        for fold in range(6):
+            if fold == 5:
+                closest = np.concatenate(all_closest)
+                if abs_v:
+                    errs = np.abs(np.concatenate(self.errors))
+                else:
+                    errs = np.concatenate(self.errors)
+                
+                upper_coeff = self.upper_bound(closest,errs,threshold=0.90)
+                
+                if jointplot:
+                    
+                    sns.set_theme(style="ticks")
+                    g = sns.JointGrid(x=closest, y=errs, marginal_ticks=True)
+
+                    # Set a log scaling on the y axis
+                    #g.ax_joint.set(yscale="log")
+
+                    # Create an inset legend for the histogram colorbar
+                    cax = g.fig.add_axes([.15, .55, .02, .2])
+
+                    # Add the joint and marginal histogram plots
+                    g.plot_joint(
+                        sns.histplot, discrete=(False, False),
+                        cmap="light:#03012d", cbar=True, cbar_ax=cax
+                    )
+                    g.plot_marginals(sns.histplot, element="step", color="#03012d")
+                    
+                    g.set_axis_labels('x', 'y', fontsize=16)
+
+                else:
+                    ax.hist2d(closest,errs)
+
+                    # 1st order fit
+                    #pfit = np.polyval(np.polyfit(closest,errs,1),closest)
+                    pfit = np.polyval([upper_coeff,0],closest)
+                    ax.plot(closest,pfit,':r')
+
+                    # Pearson correlation
+                    corr = pearsonr(closest,errs)[0]
+                    ax.text(0.5,0.7,'R = {:.2f}'.format(corr),transform=ax.transAxes,fontsize=8)
+
+                    #MAE
+                    #mae = np.mean(errs)
+                    #ax.text(0.5,0.8,'MAE: {:.2f}'.format(mae),transform=ax.transAxes,fontsize=10)
+
+                    ax.text(0.5,0.8, name, transform=ax.transAxes, fontsize=8)
+
+                    ax.set_xlabel('Euclidean feature distance',fontsize=10)
+                    ax.set_ylabel('Absolute error',fontsize=10)
+                    if xmax is not None:
+                        ax.set_xlim(0,xmax)
+                    if ymax is not None:
+                        ax.set_ylim(0,ymax)
+                
+            else:
+                train = xd_test[fold]
+                test = xd_test[fold]
+                dist = euclidean_distances(test[:,:n_feat],train[:,:n_feat])
+                closest = np.sort(dist,axis=1)[:,:n_neighbours].mean(axis=1)
+                all_closest.append(closest)
+                if abs_v:
+                    errs = np.abs(self.errors[fold])
+                else:
+                    errs =self.errors[fold]
+                    
+                    
