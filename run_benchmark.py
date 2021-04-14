@@ -1,9 +1,6 @@
 import json
 import pickle
 import os
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ["OMP_NUM_THREADS"] = "1"
 import glob
 from traceback import print_exc
 
@@ -38,11 +35,13 @@ except ImportError:
     pass
 
 
-def setup_parallelism(nthreads: int = 4, nprocs: int = 4):
-    os.environ["TF_NUM_INTRAOP_THREADS"] = str(nprocs)
-    os.environ["TF_NUM_INTEROP_THREADS"] = str(nthreads)
+def setup_threading():
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+    os.environ["TF_NUM_INTEROP_THREADS"] = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    os.environ["OMP_NUM_THREADS"] = "8"
     # import tensorflow as tf 
     # tf.config.threading.set_intra_op_parallelism_threads(nprocs)
     # tf.config.threading.set_inter_op_parallelism_threads(nthreads)
@@ -69,9 +68,15 @@ def featurize(task):
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     from modnet.preprocessing import MODData
+    from modnet.featurizers.presets import DeBreuck2020Featurizer
     from matminer.datasets import load_dataset
 
-    df = load_dataset(task)
+    if task == "matbench_elastic":
+        df_g = load_dataset("matbench_log_gvrh")
+        df_k = load_dataset("matbench_log_kvrh")
+        df = df_g.join(df_k.drop("structure",axis=1))
+    else:
+        df = load_dataset(task)
 
     mapping = {
         col: col.replace(" ", "_").replace("(", "").replace(")", "")
@@ -81,17 +86,19 @@ def featurize(task):
 
     targets = [
         col for col in df.columns if col not in ("id", "structure", "composition")
-    ][0]
+    ]
 
     try:
         materials = df["structure"] if "structure" in df.columns else df["composition"].map(Composition)
     except KeyError:
         raise RuntimeError(f"Could not find any materials data dataset for task {task!r}!")
 
+    fast_oxid_featurizer = DeBreuck2020Featurizer(fast_oxid=True)
     data = MODData(
         materials=materials.tolist(),
-        targets=df[targets].tolist(),
-        target_names=[targets],
+        targets=df[targets].values,
+        target_names=targets,
+        featurizer=fast_oxid_featurizer,
     )
     data.featurize(n_jobs=32)
     data.save(f"./precomputed/{task}_moddata.pkl.gz")
@@ -122,12 +129,13 @@ def benchmark(data, settings,n_jobs=16, fast=False):
     #best_settings = None
     names = [[[field for field in data.df_targets.columns]]]
     weights = {field: 1 for field in data.df_targets.columns}
+    from modnet.models import EnsembleMODNetModel
     return matbench_benchmark(
         data,
         names,
         weights,
         best_settings,
-        model_type="Ensemble_MODNetModel",
+        model_type=EnsembleMODNetModel,
         n_models = 5,
         classification=settings.get("classification"),
         fast=fast,
@@ -664,7 +672,7 @@ def load_or_featurize(task):
 
 
 if __name__ == "__main__":
-    n_jobs = 128
+    n_jobs = 40
 
     import argparse
 
@@ -685,7 +693,6 @@ if __name__ == "__main__":
         raise RuntimeError(f"No folder found for {task!r}.")
 
     os.chdir(task)
-    #setup_parallelism(4,4)
     print(f"Running on {n_jobs} jobs")
     settings = load_settings(task)
     settings["task"] = task
@@ -693,13 +700,14 @@ if __name__ == "__main__":
         print(f"Preparing nested CV run for task {task!r}")
 
         data = load_or_featurize(task)
+        setup_threading()
         results = benchmark(data, settings,n_jobs=n_jobs, fast=False)
         models = results['model']
         inner_models = []
         for model in models:
             inner_models += model.model
-        from modnet.models import Ensemble_MODNetModel
-        final_model = Ensemble_MODNetModel(modnet_models=inner_models)
+        from modnet.models import EnsembleMODNetModel
+        final_model = EnsembleMODNetModel(modnet_models=inner_models)
         if not os.path.exists('final_model'):
             os.makedirs('final_model')
         final_model.save(f"final_model/{task}_model")
