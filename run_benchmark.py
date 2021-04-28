@@ -8,6 +8,8 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
+from pymatgen.core import Composition
+
 DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
 matplotlib.use("pdf")
 HEIGHT = 2.5
@@ -33,12 +35,14 @@ except ImportError:
     pass
 
 
-def setup_parallelism(nthreads: int = 4, nprocs: int = 4):
-    os.environ["TF_NUM_INTRAOP_THREADS"] = str(nprocs)
-    os.environ["TF_NUM_INTEROP_THREADS"] = str(nthreads)
+def setup_threading():
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+    os.environ["TF_NUM_INTEROP_THREADS"] = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    os.environ["OMP_NUM_THREADS"] = "8"
-    # import tensorflow as tf
+    # import tensorflow as tf 
     # tf.config.threading.set_intra_op_parallelism_threads(nprocs)
     # tf.config.threading.set_inter_op_parallelism_threads(nthreads)
 
@@ -64,30 +68,44 @@ def featurize(task):
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     from modnet.preprocessing import MODData
+    from modnet.featurizers.presets import DeBreuck2020Featurizer
     from matminer.datasets import load_dataset
 
-    df = load_dataset(task)
+    if task == "matbench_elastic":
+        df_g = load_dataset("matbench_log_gvrh")
+        df_k = load_dataset("matbench_log_kvrh")
+        df = df_g.join(df_k.drop("structure",axis=1))
+    else:
+        df = load_dataset(task)
+
+    mapping = {
+        col: col.replace(" ", "_").replace("(", "").replace(")", "")
+        for ind, col in enumerate(df.columns)
+    }
+    df.rename(columns=mapping, inplace=True)
 
     targets = [
         col for col in df.columns if col not in ("id", "structure", "composition")
-    ][0]
+    ]
 
     try:
-        materials = df["structure"] if "structure" in df.columns else df["composition"]
+        materials = df["structure"] if "structure" in df.columns else df["composition"].map(Composition)
     except KeyError:
         raise RuntimeError(f"Could not find any materials data dataset for task {task!r}!")
 
+    fast_oxid_featurizer = DeBreuck2020Featurizer(fast_oxid=True)
     data = MODData(
-        structures=materials.tolist(),
-        targets=df[targets].tolist(),
-        target_names=[targets],
+        materials=materials.tolist(),
+        targets=df[targets].values,
+        target_names=targets,
+        featurizer=fast_oxid_featurizer,
     )
-    data.featurize(n_jobs=4)
+    data.featurize(n_jobs=32)
     data.save(f"./precomputed/{task}_moddata.pkl.gz")
     return data
 
 
-def benchmark(data, settings):
+def benchmark(data, settings,n_jobs=16, fast=False):
     from modnet.matbench.benchmark import matbench_benchmark
 
     columns = list(data.df_targets.columns)
@@ -102,20 +120,27 @@ def benchmark(data, settings):
         "lr": 0.005,
         "epochs": 50,
         "act": "elu",
+        "out_act": "relu",
         "batch_size": 32,
         "loss": "mae",
         "xscale": "minmax",
     }
+
+    #best_settings = None
     names = [[[field for field in data.df_targets.columns]]]
     weights = {field: 1 for field in data.df_targets.columns}
+    from modnet.models import EnsembleMODNetModel
     return matbench_benchmark(
         data,
         names,
         weights,
         best_settings,
+        model_type=EnsembleMODNetModel,
+        n_models = 5,
         classification=settings.get("classification"),
-        fast=False,
-        n_jobs=5,
+        fast=fast,
+        nested= 0 if fast else 5,
+        n_jobs=n_jobs,
     )
 
 
@@ -174,6 +199,7 @@ def analyse_results(results, settings):
 
     all_targets = []
     all_preds = []
+    all_stds = []
     all_errors = []
 
     for name in target_names:
@@ -188,6 +214,7 @@ def analyse_results(results, settings):
             preds = np.hstack(
                 [res[name].values for res in results["predictions"]]
             ).flatten()
+        stds = np.hstack([res[name].values for res in results["stds"]]).flatten()
         try:
             errors = np.hstack(
                 [res[name].values for res in results["errors"]]
@@ -197,16 +224,27 @@ def analyse_results(results, settings):
                 [res[name + "_error"].values for res in results["errors"]]
             ).flatten()
 
-        outliers = np.where(np.abs(errors) / np.mean(np.abs(errors)) > 1000)
+        outliers = np.where(np.abs(preds) / np.max(np.abs(targets)) > 1.2)[0]
+        print(outliers)
         for outlier in outliers:
             print(
                 f"Setting value of outlier {outlier} to the mean of the dataset {np.mean(targets)} from {preds[outlier]}"
             )
             preds[outlier] = np.mean(targets)
             errors[outlier] = targets[outlier] - preds[outlier]
+            #stds[outlier] = np.mean(stds)
+
+        outliers = np.where(stds / (np.max(targets)-np.min(targets)) > 0.68)[0]
+        max_std = np.sort(stds)[-(len(outliers)+1)]
+        for outlier in outliers:
+            print(
+                f"Setting value of std outlier {outlier} to the max of the dataset {max_std} from {stds[outlier]}"
+            )
+            stds[outlier] = max_std
 
         all_targets.append(targets)
         all_preds.append(preds)
+        all_stds.append(stds)
         all_errors.append(errors)
 
     for t, p, e, name in zip(all_targets, all_preds, all_errors, target_names):
@@ -214,17 +252,42 @@ def analyse_results(results, settings):
 
     os.makedirs("./plots", exist_ok=True)
 
-    for ind, (target, pred, error) in enumerate(
-        zip(all_targets, all_preds, all_errors)
+    for ind, (target, pred, stds, error) in enumerate(
+        zip(all_targets, all_preds, all_stds, all_errors)
     ):
         if not settings.get("classification", False):
             # if "nested_learning_curves" in results:
             #     plot_learning_curves(results["nested_learning_curves"], results["best_learning_curves"], settings)
             plot_jointplot(target, error, ind, settings)
             plot_scatter(target, pred, error, ind, settings, metrics)
+            plot_uncertainty(target, pred, error, stds, ind, settings, metrics)
         else:
             plot_classifier_roc(target, pred, settings)
 
+def plot_uncertainty(all_targets, all_pred, all_errors, all_stds, ind, settings, metrics):
+    from uncertainty_utils import (plot_calibration,
+     plot_interval, plot_interval_ordered,
+     plot_std, plot_std_by_index, plot_ordered_mae)
+
+    fig, axs = plt.subplots(2,3,figsize=(3 * 1.25 * HEIGHT + 0.5, 2 * HEIGHT * 1.25 + 0.5))
+    axs = axs.flatten()
+
+    plot_calibration(all_pred, all_stds, all_targets, axs[0])
+    plot_interval(all_pred, all_stds, all_targets, axs[1], settings, ind)
+    plot_interval_ordered(all_pred, all_stds, all_targets, axs[2], settings, ind)
+    plot_std(all_pred, all_stds, all_targets, axs[3], settings, ind)
+    plot_std_by_index(all_pred, all_stds, all_targets, axs[4], settings, ind)
+    plot_ordered_mae(all_pred, all_stds, all_targets, axs[5], settings, ind)
+
+    fig.tight_layout()
+    name = settings["target_names"][ind]
+    fig.suptitle(f"{name}")
+
+    if len(settings.get("target_names", [])) <= 1:
+        fname = f"plots/{settings['task']}_uncertainty.pdf"
+    else:
+        fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_uncertainty.pdf"
+    fig.savefig(fname, dpi=300)
 
 def plot_jointplot(all_targets, all_errors, ind, settings):
     import seaborn as sns
@@ -295,6 +358,7 @@ def plot_scatter(all_targets, all_pred, all_errors, ind, settings, metrics):
     )
     fig, ax = plt.subplots(figsize=(1.25 * HEIGHT, HEIGHT))
     ax.set_aspect("equal")
+
     points = ax.scatter(
         all_targets,
         all_pred,
@@ -431,6 +495,7 @@ def save_results(results, task: str):
             "scores",
             "nested_learning_curves",
             "best_learning_curves",
+            "stds",
         ]
         pickle.dump({key: results[key] for key in safe_keys}, f)
 
@@ -607,10 +672,13 @@ def load_or_featurize(task):
 
 
 if __name__ == "__main__":
+    n_jobs = 40
+
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--task")
+    parser.add_argument("--run", action="store_true")
     parser.add_argument("--summary", action="store_true")
     args = vars(parser.parse_args())
 
@@ -625,15 +693,25 @@ if __name__ == "__main__":
         raise RuntimeError(f"No folder found for {task!r}.")
 
     os.chdir(task)
-
-    setup_parallelism(4, 4)
+    print(f"Running on {n_jobs} jobs")
     settings = load_settings(task)
     settings["task"] = task
-    if not os.path.isfile(f"results/{task}_results.pkl"):
+    if args.get("run") or not os.path.isfile(f"results/{task}_results.pkl"):
         print(f"Preparing nested CV run for task {task!r}")
 
         data = load_or_featurize(task)
-        results = benchmark(data, settings)
+        setup_threading()
+        results = benchmark(data, settings,n_jobs=n_jobs, fast=False)
+        models = results['model']
+        inner_models = []
+        for model in models:
+            inner_models += model.model
+        from modnet.models import EnsembleMODNetModel
+        final_model = EnsembleMODNetModel(modnet_models=inner_models)
+        if not os.path.exists('final_model'):
+            os.makedirs('final_model')
+        final_model.save(f"final_model/{task}_model")
+        del results['model']
         try:
             save_results(results, task)
         except Exception:
