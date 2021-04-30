@@ -7,6 +7,7 @@ from collections import defaultdict
 from traceback import print_exc
 
 import numpy as np
+import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import sklearn
@@ -239,7 +240,7 @@ def run_predict(data, final_model, settings, save_folds=False, postprocess=False
         n_feat = model.model[max_feat_model].n_feat
         feature_names = model.model[max_feat_model].optimal_descriptors
         dknn = get_dknn(train_data, test_data, feature_names)
-        results["dknn"].append(dknn)
+        results["dknns"].append(dknn)
 
         if save_folds:
             opt_feat = train_data.optimal_features[:n_feat]
@@ -273,6 +274,8 @@ def get_dknn(train_data, test_data, feature_names, k = 5):
 
     dist = sklearn.metrics.pairwise.euclidean_distances(x_test_sc, x_train_sc)
     dknn = np.sort(dist, axis=1)[:, :k].mean(axis=1)
+
+    dknn = pd.DataFrame({t:dknn for t in train_data.df_targets.columns}, index = test_data.df_featurized.index)
 
     return dknn
 
@@ -334,6 +337,7 @@ def analyse_results(results, settings, post_process=False):
     all_targets = []
     all_preds = []
     all_stds = []
+    all_dknns = []
     all_errors = []
 
     for name in target_names:
@@ -349,6 +353,7 @@ def analyse_results(results, settings, post_process=False):
                 [res[name].values for res in results["predictions"]]
             ).flatten()
         stds = np.hstack([res[name].values for res in results["stds"]]).flatten()
+        dknns = np.hstack([res[name].values for res in results["dknns"]]).flatten()
         try:
             errors = np.hstack(
                 [res[name].values for res in results["errors"]]
@@ -380,6 +385,7 @@ def analyse_results(results, settings, post_process=False):
         all_targets.append(targets)
         all_preds.append(preds)
         all_stds.append(stds)
+        all_dknns.append(dknns)
         all_errors.append(errors)
 
     for t, p, e, name in zip(all_targets, all_preds, all_errors, target_names):
@@ -387,19 +393,19 @@ def analyse_results(results, settings, post_process=False):
 
     os.makedirs("./plots", exist_ok=True)
 
-    for ind, (target, pred, stds, error) in enumerate(
-        zip(all_targets, all_preds, all_stds, all_errors)
+    for ind, (target, pred, stds, dknns, error) in enumerate(
+        zip(all_targets, all_preds, all_stds, all_dknns, all_errors)
     ):
         if not settings.get("classification", False):
             # if "nested_learning_curves" in results:
             #     plot_learning_curves(results["nested_learning_curves"], results["best_learning_curves"], settings)
             plot_jointplot(target, error, ind, settings)
             plot_scatter(target, pred, error, ind, settings, metrics)
-            plot_uncertainty(target, pred, error, stds, ind, settings, metrics)
+            plot_uncertainty(target, pred, stds, dknns, ind, settings)
         else:
             plot_classifier_roc(target, pred, settings)
 
-def plot_uncertainty(all_targets, all_pred, all_errors, all_stds, ind, settings, metrics):
+def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
     from uncertainty_utils import (plot_calibration,
      plot_interval, plot_interval_ordered,
      plot_std, plot_std_by_index, plot_ordered_mae)
@@ -412,7 +418,7 @@ def plot_uncertainty(all_targets, all_pred, all_errors, all_stds, ind, settings,
     plot_interval_ordered(all_pred, all_stds, all_targets, axs[2], settings, ind)
     plot_std(all_pred, all_stds, all_targets, axs[3], settings, ind)
     plot_std_by_index(all_pred, all_stds, all_targets, axs[4], settings, ind)
-    plot_ordered_mae(all_pred, all_stds, all_targets, axs[5], settings, ind)
+    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind)
 
     fig.tight_layout()
     name = settings["target_names"][ind]
@@ -631,6 +637,7 @@ def save_results(results, task: str):
             "nested_learning_curves",
             "best_learning_curves",
             "stds",
+            "dknns",
         ]
         pickle.dump({key: results[key] for key in safe_keys}, f)
 
