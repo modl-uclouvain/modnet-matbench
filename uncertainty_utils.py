@@ -6,7 +6,17 @@ from shapely.ops import polygonize, unary_union
 marker_size = 0.8
 diag_color = "tab:green"
 
-def plot_calibration(y_pred, y_std, y_true, ax, num_bins=100):
+def plot_color(ax, xx, yy, good):
+    from matplotlib.colors import from_levels_and_colors
+    from matplotlib.collections import LineCollection
+    cmap, norm = from_levels_and_colors([0.0, 0.5, 1.5], ['blue', 'black'])
+    points = np.array([xx, yy]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    lines = LineCollection(segments, cmap=cmap, norm=norm)
+    lines.set_array(good.astype(int))
+    ax.add_collection(lines)
+
+def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
     """
     Return lists of expected and observed proportions of points falling into
     intervals corresponding to a range of quantiles.
@@ -27,8 +37,15 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=100):
     obs_proportions = np.sum(within_quantile, axis=0).flatten() / len(residuals)
 
     ax.plot([0, 1], [0, 1], "--", label="Ideal", c=diag_color)
-    ax.plot(exp_proportions, obs_proportions, label="model", c="#1f77b4")
-    ax.fill_between(exp_proportions, exp_proportions, obs_proportions, alpha=0.2)
+    plot_color(ax, exp_proportions, obs_proportions,(exp_proportions-obs_proportions)>0)
+    #ax.scatter(exp_proportions, obs_proportions, c = (exp_proportions-obs_proportions)>0, edgecolor=None)
+
+    ax.fill_between(exp_proportions, exp_proportions, obs_proportions,
+                    where= (exp_proportions-obs_proportions)>0, interpolate = True,
+                    color="black", alpha=0.2, label="Overconfident")
+    ax.fill_between(exp_proportions, exp_proportions, obs_proportions,
+                    where= (exp_proportions-obs_proportions)<0, interpolate=True,
+                    color="blue", alpha=0.2, label="Underconfident")
 
     ax.set_aspect('equal', adjustable='box')
     buff = 0.01
@@ -61,6 +78,7 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=100):
 
     ax.set_xlabel("Theoritical proportion in Gaussian interval")
     ax.set_ylabel("Observed proportion in Gaussian interval")
+    ax.legend()
 
 def plot_interval(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
 
@@ -264,6 +282,7 @@ if __name__ == "__main__":
         y = np.arange(300)
         preds = y + (np.random.rand(len(y))-0.5)*30
         unc = np.absolute(preds-y)/3 + np.random.rand(len(y))*3
+        unc[unc.argsort()[-100:]] = unc[unc.argsort()[-100:]]*10
         dknn = np.absolute(preds-y)/2 + np.random.rand(len(y))*3
 
         settings = {'target_names':['eform'], 'units':'eV'}
