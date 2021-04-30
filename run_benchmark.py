@@ -1,12 +1,18 @@
+import copy
 import json
 import pickle
 import os
 import glob
+from collections import defaultdict
 from traceback import print_exc
 
 import numpy as np
+import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
+import sklearn
+from modnet.models import MODNetModel, EnsembleMODNetModel
+from modnet.matbench.benchmark import matbench_kfold_splits
 
 from pymatgen.core import Composition
 
@@ -143,6 +149,137 @@ def benchmark(data, settings,n_jobs=16, fast=False):
         n_jobs=n_jobs,
     )
 
+def add_postprocess(model: MODNetModel,train_data):
+    # this is a not very proper solution to add post processing to an instance,
+    # but does the job (it's only temporary)
+    new_model = copy.deepcopy(model)
+    def post_process_predict(*args,**kwargs):
+        min_y = train_data.df_targets.values.min(axis=0)
+        max_y = train_data.df_targets.values.max(axis=0)
+        preds = model.predict(*args, **kwargs)
+        range = max_y-min_y
+        upper_bound = max_y + 0.25 * range
+        lower_bound = min_y - 0.25 * range
+        for i, c in enumerate(preds.columns):
+            vals = preds[c].values
+            out_of_range_idxs = np.where((vals < lower_bound[i]) | (vals > upper_bound[i]))[0]
+            vals[out_of_range_idxs] = np.random.uniform(0, 1, size=len(out_of_range_idxs)) * (max_y[i] - min_y[i]) + min_y[i]
+        return preds
+
+    new_model.predict = post_process_predict
+    return new_model
+
+def run_predict(data, final_model, settings, save_folds=False, postprocess=False):
+    """
+    Runs benchmark based on final_model without training everything again.
+    It also computes the Knn distance and puts it in the results pickle.
+    In fine, this should be integrated inside modnet benchmark.
+    :param data:
+    :param final_model:
+    :param settings:
+    :return:
+    """
+    # rebuild the EnsembleMODNetModels from the final model
+
+    n_best_archs = 5 # change this (from 1 to 5 max) to adapt number of inner best archs chosen
+
+    bootstrap_size = 2 if settings["task"]=="matbench_elastic" else 5
+    outer_fold_size = bootstrap_size * 5 * 5
+    inner_fold_size = bootstrap_size * 5
+    models = []
+
+    multi_target = bool(len(data.df_targets.columns) - 1)
+
+    for i in range(5): # outer fold
+        modnet_models = []
+        for j in range(5): # inner fold
+                modnet_models+=(
+                    final_model.model[(i * outer_fold_size) + (j * inner_fold_size):
+                                      (i * outer_fold_size) + (j * inner_fold_size) + (n_best_archs * bootstrap_size)])
+        model = EnsembleMODNetModel(modnet_models=modnet_models)
+        models.append(model)
+
+    results = defaultdict(list)
+    for ind, (train, test) in enumerate(matbench_kfold_splits(data)):
+        train_data, test_data = data.split((train, test))
+        model = models[ind]
+        if postprocess:
+            model.model = [add_postprocess(m,train_data) for m in model.model]
+        predict_kwargs = {}
+        if settings.get("classification"):
+            predict_kwargs["return_prob"] = True
+        if model.can_return_uncertainty:
+            predict_kwargs["return_unc"] = True
+
+        pred_results = model.predict(test_data, **predict_kwargs)
+        if isinstance(pred_results, tuple):
+            predictions, stds = pred_results
+        else:
+            predictions = pred_results
+            stds = None
+
+        targets = test_data.df_targets
+
+        if settings.get("classification"):
+            from sklearn.metrics import roc_auc_score
+            from sklearn.preprocessing import OneHotEncoder
+
+            y_true = OneHotEncoder().fit_transform(targets.values).toarray()
+            score = roc_auc_score(y_true, predictions.values)
+            pred_bool = model.predict(test_data, return_prob=False)
+            print(f"ROC-AUC: {score}")
+            errors = targets - pred_bool
+        elif multi_target:
+            errors = targets - predictions
+            score = np.mean(np.abs(errors.values), axis=0)
+        else:
+            errors = targets - predictions
+            score = np.mean(np.abs(errors.values))
+        # compute dkNN
+        max_feat_model = np.argmax([m.n_feat for m in model.model])
+        n_feat = model.model[max_feat_model].n_feat
+        feature_names = model.model[max_feat_model].optimal_descriptors
+        dknn = get_dknn(train_data, test_data, feature_names)
+        results["dknns"].append(dknn)
+
+        if save_folds:
+            opt_feat = train_data.optimal_features[:n_feat]
+            df_train = train_data.df_featurized
+            df_train = df_train[opt_feat]
+            df_train.to_csv("folds/train_f{}.csv".format(ind + 1))
+            df_test = test_data.df_featurized
+            df_test = df_test[opt_feat]
+            errors.columns = [x + "_error" for x in errors.columns]
+            df_test = df_test.join(errors)
+            df_test.to_csv("folds/test_f{}.csv".format(ind + 1))
+
+        results["predictions"].append(predictions)
+        if stds is not None:
+            results["stds"].append(stds)
+        results["targets"].append(targets)
+        results["errors"].append(errors)
+        results["scores"].append(score)
+        results['model'].append(model)
+
+    return results
+
+
+def get_dknn(train_data, test_data, feature_names, k = 5):
+    x_train = train_data.df_featurized[feature_names].values
+    x_test = test_data.df_featurized[feature_names].values
+
+    scaler = sklearn.preprocessing.StandardScaler()
+    x_train_sc = scaler.fit_transform(x_train)
+    x_test_sc = scaler.transform(x_test)
+
+    dist = sklearn.metrics.pairwise.euclidean_distances(x_test_sc, x_train_sc)
+    dknn = np.sort(dist, axis=1)[:, :k].mean(axis=1)
+
+    dknn = pd.DataFrame({t:dknn for t in train_data.df_targets.columns}, index = test_data.df_featurized.index)
+
+    return dknn
+
+
 
 def get_metrics(target, pred, errors, name, settings):
     import sklearn.metrics
@@ -193,13 +330,14 @@ def get_metrics(target, pred, errors, name, settings):
     return metrics
 
 
-def analyse_results(results, settings):
+def analyse_results(results, settings, post_process=False):
 
     target_names = set(c for res in results["targets"] for c in res.columns)
 
     all_targets = []
     all_preds = []
     all_stds = []
+    all_dknns = []
     all_errors = []
 
     for name in target_names:
@@ -215,6 +353,7 @@ def analyse_results(results, settings):
                 [res[name].values for res in results["predictions"]]
             ).flatten()
         stds = np.hstack([res[name].values for res in results["stds"]]).flatten()
+        dknns = np.hstack([res[name].values for res in results["dknns"]]).flatten()
         try:
             errors = np.hstack(
                 [res[name].values for res in results["errors"]]
@@ -224,27 +363,29 @@ def analyse_results(results, settings):
                 [res[name + "_error"].values for res in results["errors"]]
             ).flatten()
 
-        outliers = np.where(np.abs(preds) / np.max(np.abs(targets)) > 1.2)[0]
-        print(outliers)
-        for outlier in outliers:
-            print(
-                f"Setting value of outlier {outlier} to the mean of the dataset {np.mean(targets)} from {preds[outlier]}"
-            )
-            preds[outlier] = np.mean(targets)
-            errors[outlier] = targets[outlier] - preds[outlier]
-            #stds[outlier] = np.mean(stds)
+        if post_process:
+            outliers = np.where(np.abs(preds) / np.max(np.abs(targets)) > 1.2)[0]
+            print(outliers)
+            for outlier in outliers:
+                print(
+                    f"Setting value of outlier {outlier} to the mean of the dataset {np.mean(targets)} from {preds[outlier]}"
+                )
+                preds[outlier] = np.mean(targets)
+                errors[outlier] = targets[outlier] - preds[outlier]
+                #stds[outlier] = np.mean(stds)
 
-        outliers = np.where(stds / (np.max(targets)-np.min(targets)) > 0.68)[0]
-        max_std = np.sort(stds)[-(len(outliers)+1)]
-        for outlier in outliers:
-            print(
-                f"Setting value of std outlier {outlier} to the max of the dataset {max_std} from {stds[outlier]}"
-            )
-            stds[outlier] = max_std
+            outliers = np.where(stds / (np.max(targets)-np.min(targets)) > 0.68)[0]
+            max_std = np.sort(stds)[-(len(outliers)+1)]
+            for outlier in outliers:
+                print(
+                    f"Setting value of std outlier {outlier} to the max of the dataset {max_std} from {stds[outlier]}"
+                )
+                stds[outlier] = max_std
 
         all_targets.append(targets)
         all_preds.append(preds)
         all_stds.append(stds)
+        all_dknns.append(dknns)
         all_errors.append(errors)
 
     for t, p, e, name in zip(all_targets, all_preds, all_errors, target_names):
@@ -252,19 +393,19 @@ def analyse_results(results, settings):
 
     os.makedirs("./plots", exist_ok=True)
 
-    for ind, (target, pred, stds, error) in enumerate(
-        zip(all_targets, all_preds, all_stds, all_errors)
+    for ind, (target, pred, stds, dknns, error) in enumerate(
+        zip(all_targets, all_preds, all_stds, all_dknns, all_errors)
     ):
         if not settings.get("classification", False):
             # if "nested_learning_curves" in results:
             #     plot_learning_curves(results["nested_learning_curves"], results["best_learning_curves"], settings)
             plot_jointplot(target, error, ind, settings)
             plot_scatter(target, pred, error, ind, settings, metrics)
-            plot_uncertainty(target, pred, error, stds, ind, settings, metrics)
+            plot_uncertainty(target, pred, stds, dknns, ind, settings)
         else:
             plot_classifier_roc(target, pred, settings)
 
-def plot_uncertainty(all_targets, all_pred, all_errors, all_stds, ind, settings, metrics):
+def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
     from uncertainty_utils import (plot_calibration,
      plot_interval, plot_interval_ordered,
      plot_std, plot_std_by_index, plot_ordered_mae)
@@ -277,7 +418,7 @@ def plot_uncertainty(all_targets, all_pred, all_errors, all_stds, ind, settings,
     plot_interval_ordered(all_pred, all_stds, all_targets, axs[2], settings, ind)
     plot_std(all_pred, all_stds, all_targets, axs[3], settings, ind)
     plot_std_by_index(all_pred, all_stds, all_targets, axs[4], settings, ind)
-    plot_ordered_mae(all_pred, all_stds, all_targets, axs[5], settings, ind)
+    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind)
 
     fig.tight_layout()
     name = settings["target_names"][ind]
@@ -496,6 +637,7 @@ def save_results(results, task: str):
             "nested_learning_curves",
             "best_learning_curves",
             "stds",
+            "dknns",
         ]
         pickle.dump({key: results[key] for key in safe_keys}, f)
 
@@ -678,7 +820,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--task")
-    parser.add_argument("--run", action="store_true")
+    parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--predict", action="store_true")
     parser.add_argument("--summary", action="store_true")
     args = vars(parser.parse_args())
 
@@ -696,7 +839,37 @@ if __name__ == "__main__":
     print(f"Running on {n_jobs} jobs")
     settings = load_settings(task)
     settings["task"] = task
-    if args.get("run") or not os.path.isfile(f"results/{task}_results.pkl"):
+
+    if args.get("predict"):
+        if not os.path.isfile(f"final_model/{task}_model"):
+            raise RuntimeError("No model found for prediction, please run the benchmark first.")
+        else:
+            print("Loading data and model...")
+            data = load_or_featurize(task)
+            final_model = EnsembleMODNetModel.load(f"final_model/{task}_model")
+            print("Running predictions...")
+            results = run_predict(data, final_model, settings, postprocess=True)
+            print("Saving results...")
+            try:
+                save_results(results, task)
+            except Exception:
+                print_exc()
+
+    if args.get("plot"):
+        #make graphs only
+        if not os.path.isfile(f"results/{task}_results.pkl"):
+            raise RuntimeError("No results file, please run the benchmark before plotting.")
+        else:
+            print("Loading previous results.")
+            with open(f"results/{task}_results.pkl", "rb") as f:
+                results = pickle.load(f)
+            try:
+                analyse_results(results, settings, post_process=False)
+            except Exception:
+                print_exc()
+
+    if not args.get("plot") and not args.get("predict"):
+        #full run
         print(f"Preparing nested CV run for task {task!r}")
 
         data = load_or_featurize(task)
@@ -716,15 +889,5 @@ if __name__ == "__main__":
             save_results(results, task)
         except Exception:
             print_exc()
-
-    else:
-        print("Loading previous results.")
-        with open(f"results/{task}_results.pkl", "rb") as f:
-            results = pickle.load(f)
-
-    try:
-        analyse_results(results, settings)
-    except Exception:
-        print_exc()
 
     os.chdir("..")

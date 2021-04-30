@@ -6,7 +6,17 @@ from shapely.ops import polygonize, unary_union
 marker_size = 0.8
 diag_color = "tab:green"
 
-def plot_calibration(y_pred, y_std, y_true, ax, num_bins=100):
+def plot_color(ax, xx, yy, good):
+    from matplotlib.colors import from_levels_and_colors
+    from matplotlib.collections import LineCollection
+    cmap, norm = from_levels_and_colors([0.0, 0.5, 1.5], ['blue', 'black'])
+    points = np.array([xx, yy]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    lines = LineCollection(segments, cmap=cmap, norm=norm)
+    lines.set_array(good.astype(int))
+    ax.add_collection(lines)
+
+def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
     """
     Return lists of expected and observed proportions of points falling into
     intervals corresponding to a range of quantiles.
@@ -27,8 +37,15 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=100):
     obs_proportions = np.sum(within_quantile, axis=0).flatten() / len(residuals)
 
     ax.plot([0, 1], [0, 1], "--", label="Ideal", c=diag_color)
-    ax.plot(exp_proportions, obs_proportions, label="model", c="#1f77b4")
-    ax.fill_between(exp_proportions, exp_proportions, obs_proportions, alpha=0.2)
+    plot_color(ax, exp_proportions, obs_proportions,(exp_proportions-obs_proportions)>0)
+    #ax.scatter(exp_proportions, obs_proportions, c = (exp_proportions-obs_proportions)>0, edgecolor=None)
+
+    ax.fill_between(exp_proportions, exp_proportions, obs_proportions,
+                    where= (exp_proportions-obs_proportions)>0, interpolate = True,
+                    color="black", alpha=0.2, label="Overconfident")
+    ax.fill_between(exp_proportions, exp_proportions, obs_proportions,
+                    where= (exp_proportions-obs_proportions)<0, interpolate=True,
+                    color="blue", alpha=0.2, label="Underconfident")
 
     ax.set_aspect('equal', adjustable='box')
     buff = 0.01
@@ -61,6 +78,7 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=100):
 
     ax.set_xlabel("Theoritical proportion in Gaussian interval")
     ax.set_ylabel("Observed proportion in Gaussian interval")
+    ax.legend()
 
 def plot_interval(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
 
@@ -204,38 +222,51 @@ def plot_std_by_index(y_pred, y_std, y_true, ax, settings,ind, num_stds_confiden
     ax.set_aspect((x1-x0)/(y1-y0))
 
 
-def plot_ordered_mae(y_pred, y_std, y_true, ax, settings,ind):
+def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind):
 
     error = np.absolute(y_pred-y_true)
     order = np.argsort(y_std.flatten())[::-1]
     std_error = error[order]
 
     perfect_error = np.sort(error)[::-1]
+
+
     np.random.seed(0)
-    random_error = error.copy()
-    np.random.shuffle(error)
+    random_error = np.zeros(shape=(1000,len(error)))
+    for i in range(len(random_error)):
+        random_error[i,:] = np.random.permutation(error)
+    random_mean = np.zeros(len(error))
+    random_std = np.zeros(len(error))
+
+    order = np.argsort(dknn.flatten())[::-1]
+    dknn_error = error[order]
 
     for i in range(len(error)):
         perfect_error[i] = perfect_error[i:].mean()
         std_error[i] = std_error[i:].mean()
-        random_error[i] = random_error[i:].mean()
+        dknn_error[i] = dknn_error[i:].mean()
+        random_mean[i] = random_error[:,i:].mean()
+        random_std[i] = random_error[:, i:].mean(axis=1).std()
 
     ax.plot(perfect_error, c='tab:green', label='Error ranked')
-    ax.plot(random_error, c='tab:red', label='Randomly ranked')
+    ax.plot(random_mean, c='tab:red', label='Randomly ranked')
+    ax.fill_between(range(len(error)), random_mean-random_std, random_mean+random_std, color='tab:red',alpha=0.5)
     ax.plot(std_error, c='tab:blue', label='Std ranked')
+    ax.plot(dknn_error, c='tab:orange', label='dKNN ranked')
+
     x0,x1 = ax.get_xlim()
     y0,y1 = ax.get_ylim()
     ax.set_aspect((x1-x0)/(y1-y0))
     import matplotlib.ticker as mtick
     ax.xaxis.set_major_formatter(mtick.PercentFormatter(len(error)))
-    ax.legend()
+    ax.legend(loc='upper left')
     name = settings["target_names"][ind]
     ax.set_xlabel("Confidence percentile")
     ax.set_ylabel(f"MAE {name} ({settings.get('units','dimensionless')})")
 
 
 if __name__ == "__main__":
-        # for testing purpose
+        # for testing purposes
         import matplotlib
         import matplotlib.pyplot as plt
         DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
@@ -251,6 +282,8 @@ if __name__ == "__main__":
         y = np.arange(300)
         preds = y + (np.random.rand(len(y))-0.5)*30
         unc = np.absolute(preds-y)/3 + np.random.rand(len(y))*3
+        unc[unc.argsort()[-100:]] = unc[unc.argsort()[-100:]]*10
+        dknn = np.absolute(preds-y)/2 + np.random.rand(len(y))*3
 
         settings = {'target_names':['eform'], 'units':'eV'}
 
@@ -259,7 +292,7 @@ if __name__ == "__main__":
         plot_interval_ordered(preds, unc, y, axs[2], settings, 0)
         plot_std(preds, unc, y, axs[3], settings, 0)
         plot_std_by_index(preds, unc, y, axs[4], settings, 0)
-        plot_ordered_mae(preds, unc, y, axs[5], settings, 0)
+        plot_ordered_mae(preds, unc, y, dknn, axs[5], settings, 0)
 
         fig.tight_layout()
         fig.suptitle('Dummy test plot')
