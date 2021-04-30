@@ -42,10 +42,10 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
 
     ax.fill_between(exp_proportions, exp_proportions, obs_proportions,
                     where= (exp_proportions-obs_proportions)>0, interpolate = True,
-                    color="black", alpha=0.2, label="Overconfident")
+                    color="black", alpha=0.2, label="Area below curve: overconfident")
     ax.fill_between(exp_proportions, exp_proportions, obs_proportions,
                     where= (exp_proportions-obs_proportions)<0, interpolate=True,
-                    color="blue", alpha=0.2, label="Underconfident")
+                    color="blue", alpha=0.2, label="Area above curve: underconfident")
 
     ax.set_aspect('equal', adjustable='box')
     buff = 0.01
@@ -76,8 +76,8 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
         horizontalalignment="right",
     )
 
-    ax.set_xlabel("Theoritical proportion in Gaussian interval")
-    ax.set_ylabel("Observed proportion in Gaussian interval")
+    ax.set_xlabel("Ideal proportion within error bars")
+    ax.set_ylabel("Observed proportion within error bars")
     ax.legend()
 
 def plot_interval(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
