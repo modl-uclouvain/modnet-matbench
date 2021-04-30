@@ -11,8 +11,6 @@ import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import sklearn
-from modnet.models import MODNetModel, EnsembleMODNetModel
-from modnet.matbench.benchmark import matbench_kfold_splits
 
 from pymatgen.core import Composition
 
@@ -32,13 +30,6 @@ else:
     matplotlib.rcParams["font.family"] = "sans-serif"
     matplotlib.rcParams["font.sans-serif"] = "Arial"
 
-
-# Require these imports for backwards-compat when unpickling
-try:
-    from modnet.featurizers.presets import CompositionOnlyFeaturizer  # noqa
-    from modnet.preprocessing import MODData, CompositionContainer  # noqa
-except ImportError:
-    pass
 
 
 def setup_threading():
@@ -113,6 +104,7 @@ def featurize(task):
 
 def benchmark(data, settings,n_jobs=16, fast=False):
     from modnet.matbench.benchmark import matbench_benchmark
+    from modnet.models import MODNetModel, EnsembleMODNetModel
 
     columns = list(data.df_targets.columns)
     mapping = {
@@ -135,7 +127,6 @@ def benchmark(data, settings,n_jobs=16, fast=False):
     #best_settings = None
     names = [[[field for field in data.df_targets.columns]]]
     weights = {field: 1 for field in data.df_targets.columns}
-    from modnet.models import EnsembleMODNetModel
     return matbench_benchmark(
         data,
         names,
@@ -149,7 +140,7 @@ def benchmark(data, settings,n_jobs=16, fast=False):
         n_jobs=n_jobs,
     )
 
-def add_postprocess(model: MODNetModel,train_data):
+def add_postprocess(model: "MODNetModel", train_data):
     # this is a not very proper solution to add post processing to an instance,
     # but does the job (it's only temporary)
     new_model = copy.deepcopy(model)
@@ -180,6 +171,8 @@ def run_predict(data, final_model, settings, save_folds=False, postprocess=False
     :return:
     """
     # rebuild the EnsembleMODNetModels from the final model
+    from modnet.models import EnsembleMODNetModel
+    from modnet.matbench.benchmark import matbench_kfold_splits
 
     n_best_archs = 5 # change this (from 1 to 5 max) to adapt number of inner best archs chosen
 
@@ -840,12 +833,21 @@ if __name__ == "__main__":
     settings = load_settings(task)
     settings["task"] = task
 
+    # Require these imports for backwards-compat when unpickling
+    try:
+        from modnet.featurizers.presets import CompositionOnlyFeaturizer  # noqa
+        from modnet.preprocessing import MODData, CompositionContainer  # noqa
+    except ImportError:
+        pass
+
     if args.get("predict"):
         if not os.path.isfile(f"final_model/{task}_model"):
             raise RuntimeError("No model found for prediction, please run the benchmark first.")
         else:
             print("Loading data and model...")
             data = load_or_featurize(task)
+            from modnet.models import EnsembleMODNetModel
+            # Setup alias for backwards compat
             final_model = EnsembleMODNetModel.load(f"final_model/{task}_model")
             print("Running predictions...")
             results = run_predict(data, final_model, settings, postprocess=True)
