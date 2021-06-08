@@ -48,7 +48,7 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
                     color="blue", alpha=0.2, label="Underconfident")
 
     ax.set_aspect('equal', adjustable='box')
-    buff = 0.01
+    buff = 0
     ax.set_xlim([0 - buff, 1 + buff])
     ax.set_ylim([0 - buff, 1 + buff])
 
@@ -140,6 +140,7 @@ def plot_interval_ordered(y_pred, y_std, y_true, ax, settings,ind, num_stds_conf
     )
     ax.scatter(xs, y_pred, s=marker_size, c="tab:blue", label='Predictions', zorder=2)
     ax.plot(xs, y_true, "--", linewidth=marker_size, c=diag_color, label='Target', zorder=3)
+    ax.set_xlim([0,len(y_pred)])
 
     ax.legend()
 
@@ -160,26 +161,49 @@ def plot_interval_ordered(y_pred, y_std, y_true, ax, settings,ind, num_stds_conf
     ax.set_aspect((x1-x0)/(y1-y0))
 
 
-def plot_std(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
+def plot_std(y_pred, y_std, y_true, dknn, ax, settings,ind, num_stds_confidence_bound=2):
 
     error = np.absolute(y_pred-y_true)
     #intervals = num_stds_confidence_bound * y_std
-
     ax.scatter(
-        error,
         y_std,
+        error,
         c="#1f77b4",
         alpha=0.5,
         s=marker_size,
     )
 
+    ax2 = ax.twinx()
+    ax2.scatter(
+        y_std,
+        dknn,
+        c="red",
+        alpha=0.5,
+        s=marker_size,
+    )
+
+    ax2.spines['right'].set_color('red')
+    ax2.tick_params(axis='y', colors='red', labelsize=7)
+
     # Format
     name = settings["target_names"][ind]
-    ax.set_xlabel(f"Absolute error {name} ({settings.get('units','dimensionless')})")
-    ax.set_ylabel("Predicted STD")
-    x0,x1 = ax.get_xlim()
-    y0,y1 = ax.get_ylim()
-    ax.set_aspect((x1-x0)/(y1-y0))
+    ax.set_xlabel("Predicted STD")
+    ax.set_ylabel(f"Absolute error {name} ({settings.get('units','dimensionless')})")
+    ax2.set_ylabel("$d_{KNN}$", color="red")
+
+    _,x1 = ax.get_xlim()
+    _,y1 = ax.get_ylim()
+    ax.set_xlim([0,x1])
+    ax.set_ylim([0,y1])
+    ax.set_aspect((x1 - 0) / (y1 - 0))
+
+    _,x1 = ax2.get_xlim()
+    _,y1 = ax2.get_ylim()
+    ax2.set_xlim([0,x1])
+    ax2.set_ylim([0,y1])
+
+    ax2.set_aspect((x1-0)/(y1-0))
+
 
 
 def plot_std_by_index(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
@@ -217,6 +241,7 @@ def plot_std_by_index(y_pred, y_std, y_true, ax, settings,ind, num_stds_confiden
     ax.set_ylim(lims_ext)
     ax.set_xlabel(f"Index ordered by error")
     ax.set_ylabel(f"Error {name} ({settings.get('units','dimensionless')})")
+    ax.set_xlim([0,len(y_pred)])
     x0,x1 = ax.get_xlim()
     y0,y1 = ax.get_ylim()
     ax.set_aspect((x1-x0)/(y1-y0))
@@ -248,18 +273,20 @@ def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind):
         random_mean[i] = random_error[:,i:].mean()
         random_std[i] = random_error[:, i:].mean(axis=1).std()
 
-    ax.plot(perfect_error, c='tab:green', label='Error ranked')
-    ax.plot(random_mean, c='tab:red', label='Randomly ranked')
-    ax.fill_between(range(len(error)), random_mean-random_std, random_mean+random_std, color='tab:red',alpha=0.5)
-    ax.plot(std_error, c='tab:blue', label='Std ranked')
-    ax.plot(dknn_error, c='tab:orange', label='dKNN ranked')
+    percintile = np.linspace(0,100,len(error))
+    ax.plot(percintile, perfect_error, c='tab:green', label='Error ranked')
+    ax.plot(percintile, random_mean, c='tab:red', label='Randomly ranked')
+    ax.fill_between(percintile, random_mean-random_std, random_mean+random_std, color='tab:red',alpha=0.5)
+    ax.plot(percintile, std_error, c='tab:blue', label='Std ranked')
+    ax.plot(percintile, dknn_error, c='tab:orange', label='dKNN ranked')
 
-    x0,x1 = ax.get_xlim()
-    y0,y1 = ax.get_ylim()
+    x0,x1 = 0,100
+    y0,y1 = 0,random_mean[0]*1.2
+    ax.set_xlim((x0, x1))
+    ax.set_ylim((y0,y1))
     ax.set_aspect((x1-x0)/(y1-y0))
-    import matplotlib.ticker as mtick
-    ax.xaxis.set_major_formatter(mtick.PercentFormatter(len(error)))
-    ax.legend(loc='upper left')
+    ax.set_xticks([0,20,40,60,80,100])
+    #ax.legend(loc='upper left')
     name = settings["target_names"][ind]
     ax.set_xlabel("Confidence percentile")
     ax.set_ylabel(f"MAE {name} ({settings.get('units','dimensionless')})")
