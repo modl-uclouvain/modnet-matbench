@@ -19,9 +19,10 @@ from pymatgen.core import Composition
 DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
 matplotlib.use("pdf")
 HEIGHT = 2.5
+DPI = 100
 matplotlib.rcParams["font.size"] = 8
 
-STIX = False
+STIX = True
 
 if STIX:
     # matplotlib.rcParams["font.family"] = "sans-serif"
@@ -48,7 +49,7 @@ def setup_threading():
     os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
     os.environ["TF_NUM_INTEROP_THREADS"] = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    # import tensorflow as tf 
+    # import tensorflow as tf
     # tf.config.threading.set_intra_op_parallelism_threads(nprocs)
     # tf.config.threading.set_inter_op_parallelism_threads(nthreads)
 
@@ -149,27 +150,7 @@ def benchmark(data, settings,n_jobs=16, fast=False):
         n_jobs=n_jobs,
     )
 
-def add_postprocess(model: MODNetModel,train_data):
-    # this is a not very proper solution to add post processing to an instance,
-    # but does the job (it's only temporary)
-    new_model = copy.deepcopy(model)
-    def post_process_predict(*args,**kwargs):
-        min_y = train_data.df_targets.values.min(axis=0)
-        max_y = train_data.df_targets.values.max(axis=0)
-        preds = model.predict(*args, **kwargs)
-        range = max_y-min_y
-        upper_bound = max_y + 0.25 * range
-        lower_bound = min_y - 0.25 * range
-        for i, c in enumerate(preds.columns):
-            vals = preds[c].values
-            out_of_range_idxs = np.where((vals < lower_bound[i]) | (vals > upper_bound[i]))[0]
-            vals[out_of_range_idxs] = np.random.uniform(0, 1, size=len(out_of_range_idxs)) * (max_y[i] - min_y[i]) + min_y[i]
-        return preds
-
-    new_model.predict = post_process_predict
-    return new_model
-
-def run_predict(data, final_model, settings, save_folds=False, postprocess=False):
+def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
     """
     Runs benchmark based on final_model without training everything again.
     It also computes the Knn distance and puts it in the results pickle.
@@ -179,16 +160,19 @@ def run_predict(data, final_model, settings, save_folds=False, postprocess=False
     :param settings:
     :return:
     """
+
+    task = settings["task"]
     # rebuild the EnsembleMODNetModels from the final model
 
     n_best_archs = 5 # change this (from 1 to 5 max) to adapt number of inner best archs chosen
 
-    bootstrap_size = 2 if settings["task"]=="matbench_elastic" else 5
+    bootstrap_size = 5
     outer_fold_size = bootstrap_size * 5 * 5
     inner_fold_size = bootstrap_size * 5
     models = []
 
     multi_target = bool(len(data.df_targets.columns) - 1)
+
 
     for i in range(5): # outer fold
         modnet_models = []
@@ -199,12 +183,31 @@ def run_predict(data, final_model, settings, save_folds=False, postprocess=False
         model = EnsembleMODNetModel(modnet_models=modnet_models)
         models.append(model)
 
-    results = defaultdict(list)
+    if dknn_only:
+        with open(f"results/{task}_results.pkl", "rb") as f:
+            results = pickle.load(f)
+            results["dknns"] = []
+    else:
+        results = defaultdict(list)
+
     for ind, (train, test) in enumerate(matbench_kfold_splits(data)):
         train_data, test_data = data.split((train, test))
+        path = "folds/train_moddata_f{}".format(ind + 1)
+        train_data = MODData.load(path)
+        assert len(set(train_data.df_targets.index).intersection(set(test_data.df_targets.index))) == 0
         model = models[ind]
-        if postprocess:
-            model.model = [add_postprocess(m,train_data) for m in model.model]
+
+        # compute dkNN
+
+        # TODO: test this quickly before submitting
+        max_feat_model = np.argmax([m.n_feat for m in model.model])
+        n_feat = model.model[max_feat_model].n_feat
+        feature_names = model.model[max_feat_model].optimal_descriptors
+        dknn = get_dknn(train_data, test_data, feature_names)
+        results["dknns"].append(dknn)
+        if dknn_only:
+            continue
+
         predict_kwargs = {}
         if settings.get("classification"):
             predict_kwargs["return_prob"] = True
@@ -235,12 +238,6 @@ def run_predict(data, final_model, settings, save_folds=False, postprocess=False
         else:
             errors = targets - predictions
             score = np.mean(np.abs(errors.values))
-        # compute dkNN
-        max_feat_model = np.argmax([m.n_feat for m in model.model])
-        n_feat = model.model[max_feat_model].n_feat
-        feature_names = model.model[max_feat_model].optimal_descriptors
-        dknn = get_dknn(train_data, test_data, feature_names)
-        results["dknns"].append(dknn)
 
         if save_folds:
             opt_feat = train_data.optimal_features[:n_feat]
@@ -265,6 +262,8 @@ def run_predict(data, final_model, settings, save_folds=False, postprocess=False
 
 
 def get_dknn(train_data, test_data, feature_names, k = 5):
+
+    feature_names = list(set(feature_names).intersection(set(train_data.target_nmi.index)))
     x_train = train_data.df_featurized[feature_names].values
     x_test = test_data.df_featurized[feature_names].values
 
@@ -272,9 +271,13 @@ def get_dknn(train_data, test_data, feature_names, k = 5):
     x_train_sc = scaler.fit_transform(x_train)
     x_test_sc = scaler.transform(x_test)
 
-    dist = sklearn.metrics.pairwise.euclidean_distances(x_test_sc, x_train_sc)
-    dknn = np.sort(dist, axis=1)[:, :k].mean(axis=1)
+    #weight features
+    #w = (train_data.target_nmi[feature_names].values)**2
+    #x_train_sc = x_train_sc*w
+    #x_test_sc = x_test_sc*w
 
+    dist = sklearn.metrics.pairwise_distances(x_test_sc, x_train_sc, metric='cosine')
+    dknn = np.sort(dist, axis=1)[:, :k].mean(axis=1)
     dknn = pd.DataFrame({t:dknn for t in train_data.df_targets.columns}, index = test_data.df_featurized.index)
 
     return dknn
@@ -289,10 +292,10 @@ def get_metrics(target, pred, errors, name, settings):
 
     if settings.get("classification"):
         metrics["roc_auc"] = score = sklearn.metrics.roc_auc_score(
-            target.reshape(-1, 1), 1 - pred.reshape(-1, 1)
+            target.reshape(-1, 1), pred.reshape(-1, 1)
         )
         metrics["ap_score"] = ap_score = sklearn.metrics.average_precision_score(
-            target.reshape(-1, 1), 1 - pred.reshape(-1, 1), average="micro"
+            target.reshape(-1, 1), pred.reshape(-1, 1), average="micro"
         )
         print(f"ROC-AUC: {score:3.3f}, AP: {ap_score:3.3f}")
     else:
@@ -330,9 +333,19 @@ def get_metrics(target, pred, errors, name, settings):
     return metrics
 
 
-def analyse_results(results, settings, post_process=False):
+def analyse_results(results, settings):
 
     target_names = set(c for res in results["targets"] for c in res.columns)
+
+    if settings.get("classification", False): # this small parts changes the prediction dataframe from (task_prob_0, task_prob_1) to single column dataframes giving the probability of class 1, with task as column name
+        name = list(target_names)[0]
+        results['predictions'] = [
+            results['predictions'][i].drop(name + '_prob_0', axis=1).rename(columns={name + '_prob_1': name}) for i in
+            range(5)]
+        results['stds'] = [
+            results['stds'][i].drop(name + '_prob_0', axis=1).rename(columns={name + '_prob_1': name}) for i in
+            range(5)]
+
 
     all_targets = []
     all_preds = []
@@ -363,25 +376,6 @@ def analyse_results(results, settings, post_process=False):
                 [res[name + "_error"].values for res in results["errors"]]
             ).flatten()
 
-        if post_process:
-            outliers = np.where(np.abs(preds) / np.max(np.abs(targets)) > 1.2)[0]
-            print(outliers)
-            for outlier in outliers:
-                print(
-                    f"Setting value of outlier {outlier} to the mean of the dataset {np.mean(targets)} from {preds[outlier]}"
-                )
-                preds[outlier] = np.mean(targets)
-                errors[outlier] = targets[outlier] - preds[outlier]
-                #stds[outlier] = np.mean(stds)
-
-            outliers = np.where(stds / (np.max(targets)-np.min(targets)) > 0.68)[0]
-            max_std = np.sort(stds)[-(len(outliers)+1)]
-            for outlier in outliers:
-                print(
-                    f"Setting value of std outlier {outlier} to the max of the dataset {max_std} from {stds[outlier]}"
-                )
-                stds[outlier] = max_std
-
         all_targets.append(targets)
         all_preds.append(preds)
         all_stds.append(stds)
@@ -390,12 +384,14 @@ def analyse_results(results, settings, post_process=False):
 
     for t, p, e, name in zip(all_targets, all_preds, all_errors, target_names):
         metrics = get_metrics(t, p, e, name, settings)
+        print(metrics)
 
     os.makedirs("./plots", exist_ok=True)
-
-    for ind, (target, pred, stds, dknns, error) in enumerate(
-        zip(all_targets, all_preds, all_stds, all_dknns, all_errors)
+    res = []
+    for ind, (target, pred, stds, dknns, error, name) in enumerate(
+        zip(all_targets, all_preds, all_stds, all_dknns, all_errors, target_names)
     ):
+        res.append((name,target, pred, stds, dknns, ind, settings))
         if not settings.get("classification", False):
             # if "nested_learning_curves" in results:
             #     plot_learning_curves(results["nested_learning_curves"], results["best_learning_curves"], settings)
@@ -404,31 +400,81 @@ def analyse_results(results, settings, post_process=False):
             plot_uncertainty(target, pred, stds, dknns, ind, settings)
         else:
             plot_classifier_roc(target, pred, settings)
+    return res
+
+def plot_uncertainty_summary():
+    from uncertainty_utils import plot_ordered_mae
+
+    fig, ax = plt.subplots(2, 3, figsize=(3 *  HEIGHT, 2 * HEIGHT), sharex=True)
+    ax = ax.flatten()
+
+    matbench_ordered = [
+        "steels",
+        "jdft2d",
+        "dielectric",
+        "expt_gap",
+        # "expt_is_metal",
+        # "glass",
+        "phonons",
+        "elastic",
+    ]
+
+    all_results = []
+    for task in matbench_ordered:
+        with open(f"matbench_{task}/results/matbench_{task}_results.pkl", "rb") as f:
+            results = pickle.load(f)
+        settings = load_settings("matbench_" + task)
+        settings["task"] = "matbench_" + task
+        os.chdir(f"matbench_{task}")
+        res = analyse_results(results, settings)
+        os.chdir("..")
+        all_results+=res
+
+    for j,(name,target, pred, stds, dknns, ind, settings) in enumerate(all_results):
+        if j > 5:
+            break
+        yticks = False
+        if j % 3 == 0:
+            yticks = True
+        lines = plot_ordered_mae(pred, stds, target, dknns, ax[j], settings, ind, yticks=yticks)
+
+    labels = ["Error ranked", "Randomly ranked", "$\\sigma$ ranked", "$d_\\mathrm{KNN}$ ranked"]
+
+    plt.legend(
+        [l[0] for l in lines],
+        labels,
+        fancybox=True,
+        ncol=len(lines)
+    )
+    plt.text("Confidence interval", 0.5, 0.9, horizontalalignment="center", transform=fig.transFigure)
+    plt.text("Fraction of MAE", 0.0, 0.5, horizontalalignment="center", rotation="vertical", transform=fig.transFigure)
+    # plt.tight_layout()
+    fig.savefig("uncertainty_summary_cosine.pdf", dpi=DPI)
 
 def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
     from uncertainty_utils import (plot_calibration,
-     plot_interval, plot_interval_ordered,
-     plot_std, plot_std_by_index, plot_ordered_mae)
+        plot_interval, plot_interval_ordered,
+        plot_std, plot_std_by_index, plot_ordered_mae)
 
-    fig, axs = plt.subplots(2,3,figsize=(3 * 1.25 * HEIGHT + 0.5, 2 * HEIGHT * 1.25 + 0.5))
+    fig, axs = plt.subplots(2, 3, figsize=(3 * HEIGHT, 2 * HEIGHT + 0.5))
     axs = axs.flatten()
 
     plot_calibration(all_pred, all_stds, all_targets, axs[0])
     plot_interval(all_pred, all_stds, all_targets, axs[1], settings, ind)
     plot_interval_ordered(all_pred, all_stds, all_targets, axs[2], settings, ind)
-    plot_std(all_pred, all_stds, all_targets, axs[3], settings, ind)
+    plot_std(all_pred, all_stds, all_targets, all_dknns, axs[3], settings, ind)
     plot_std_by_index(all_pred, all_stds, all_targets, axs[4], settings, ind)
-    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind)
+    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind, legend=True)
 
     fig.tight_layout()
     name = settings["target_names"][ind]
-    fig.suptitle(f"{name}")
+    #fig.suptitle(f"{name}")
 
     if len(settings.get("target_names", [])) <= 1:
         fname = f"plots/{settings['task']}_uncertainty.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_uncertainty.pdf"
-    fig.savefig(fname, dpi=300)
+    fig.savefig(fname, dpi=DPI)
 
 def plot_jointplot(all_targets, all_errors, ind, settings):
     import seaborn as sns
@@ -486,7 +532,7 @@ def plot_jointplot(all_targets, all_errors, ind, settings):
         fname = f"plots/{settings['task']}_jointplot.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_jointplot.pdf"
-    plt.savefig(fname, dpi=300)
+    plt.savefig(fname, dpi=DPI)
 
 
 def plot_scatter(all_targets, all_pred, all_errors, ind, settings, metrics):
@@ -543,7 +589,7 @@ def plot_scatter(all_targets, all_pred, all_errors, ind, settings, metrics):
         fname = f"plots/{settings['task']}_scatter.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_scatter.pdf"
-    plt.savefig(fname, dpi=300)
+    plt.savefig(fname, dpi=DPI)
 
 
 def plot_classifier_roc(all_targets, all_pred, settings):
@@ -553,8 +599,8 @@ def plot_classifier_roc(all_targets, all_pred, settings):
 
     # from sklearn.preprocessing import OneHotEncoder
     # one_hot_targets = OneHotEncoder().fit_transform(all_targets.reshape(-1, 1)).toarray()
-    fpr, tpr, thresholds = sklearn.metrics.roc_curve(all_targets, 1 - all_pred)
-    score = sklearn.metrics.roc_auc_score(all_targets, 1 - all_pred)
+    fpr, tpr, thresholds = sklearn.metrics.roc_curve(all_targets, all_pred)
+    score = sklearn.metrics.roc_auc_score(all_targets, all_pred)
     fig, axes = plt.subplots(1, 2, figsize=(2 * HEIGHT, HEIGHT))
     ax = axes[0]
     ax.plot(fpr, tpr, c=DARK2_COLOURS[0])
@@ -573,10 +619,10 @@ def plot_classifier_roc(all_targets, all_pred, settings):
 
     ax = axes[1]
     precision, recall, thresholds = sklearn.metrics.precision_recall_curve(
-        all_targets, 1 - all_pred
+        all_targets, all_pred
     )
     ap_score = sklearn.metrics.average_precision_score(
-        all_targets, 1 - all_pred, average="micro"
+        all_targets, all_pred, average="micro"
     )
     x = np.asarray([1] + list(recall))
     y = np.asarray([0] + list(precision))
@@ -591,7 +637,7 @@ def plot_classifier_roc(all_targets, all_pred, settings):
     ax.set_ylabel("Precision")
 
     plt.tight_layout()
-    plt.savefig(f"plots/{settings['task']}_roc.pdf", dpi=300)
+    plt.savefig(f"plots/{settings['task']}_roc.pdf", dpi=DPI)
 
 
 def plot_learning_curves(
@@ -622,7 +668,7 @@ def plot_learning_curves(
     else:
         ax.set_ylabel("Validation loss")
 
-    plt.savefig(f"plots/{settings['task']}_learning_curves.pdf", dpi=300)
+    plt.savefig(f"plots/{settings['task']}_learning_curves.pdf", dpi=DPI)
 
 
 def save_results(results, task: str):
@@ -649,7 +695,7 @@ def make_summary_plot():
 
     # import seaborn as sns # noqa
 
-    fig, ax = plt.subplots(figsize=(4, 3))
+    fig, ax = plt.subplots(figsize=(4, 4))
 
     matbench_ordered = [
         "steels",
@@ -669,12 +715,13 @@ def make_summary_plot():
     mins = []
     maxs = []
 
-    cmap = {"AM": 1, "RF": 2, "MEGNet": 3, "CGCNN": 4}
+    cmap = {"MODNet": 0, "AM": 1, "RF": 2, "MEGNet": 3, "CGCNN": 4}
+    markers = {"MODNet": "*", "AM": "D", "RF": "s", "MEGNet": "^", "CGCNN": "v"}
     for task in matbench_ordered:
         settings = load_settings("matbench_" + task)
         for jnd, name in enumerate(settings["target_names"]):
             mae, min_, max_, y = add_to_plot(
-                task, jnd, ax, settings, name_counter, cmap
+                task, jnd, ax, settings, name_counter, cmap, markers, offset_=0.1,
             )
             name_counter += 1
             names.append(name)
@@ -682,7 +729,6 @@ def make_summary_plot():
             maxs.append(max_)
             mins.append(min_)
             ys.append(y)
-            ax.axhline(y, alpha=0.2, ls="--", lw=1, c="grey")
 
     ax.plot(maes, ys, c=DARK2_COLOURS[0], alpha=0.5, zorder=0)
     ax.fill_betweenx(
@@ -699,9 +745,8 @@ def make_summary_plot():
     xlims = ax.get_xlim()
     ylims = ax.get_ylim()
 
-    marker_style = {"marker": "*", "s": 30, "lw": 0.5, "edgecolor": "k"}
+    marker_style = {"s": 30, "lw": 0.5, "edgecolor": "k"}
 
-    ax.scatter(1e20, 1e20, c=[DARK2_COLOURS[0]], label="MODNet", **marker_style)
     ax.scatter(
         1e20,
         1e20,
@@ -713,7 +758,7 @@ def make_summary_plot():
     )
     for method in cmap:
         ax.scatter(
-            1e20, 1e20, c=[DARK2_COLOURS[cmap[method]]], label=method, **marker_style
+            1e20, 1e20, c=[DARK2_COLOURS[cmap[method]]], label=method, marker=markers[method], **marker_style
         )
     ax.legend(loc="upper right")
 
@@ -723,13 +768,13 @@ def make_summary_plot():
     ax.set_yticks(ys)
 
     names = [
-        "yield strength ($n=312$)",
-        "exfoliation energy ($n=636$)",
-        "refractive index ($n=4764$)",
-        "exp. band gap ($n=4604$)",
-        "$\\log_{10}{K}$ ($n=10987$)",
-        "$\\log_{10}{G}$ ($n=10987$)",
-        "$\\mathrm{argmax}(\\mathrm{PhDOS})$ ($n=1265$)",
+        "yield strength (n=312)",
+        "exfoliation energy (n=636)",
+        "refractive index (n=4764)",
+        "exp. band gap (n=4604)",
+        "$\\log_{10}{K}$ (n=10987)",
+        "$\\log_{10}{G}$ (n=10987)",
+        "$\\mathrm{argmax}(\\mathrm{PhDOS})$ (n=1265)",
     ]
 
     ax.set_yticklabels(names)
@@ -738,10 +783,10 @@ def make_summary_plot():
 
     plt.tight_layout()
 
-    plt.savefig("summary.pdf", dpi=300)
+    plt.savefig("summary.pdf", dpi=DPI)
 
 
-def add_to_plot(task, jnd, ax, settings, y, cmap):
+def add_to_plot(task, jnd, ax, settings, y, cmap, markers, offset_=0.1):
     import pickle
 
     with open(f"matbench_{task}/results/matbench_{task}_results.pkl", "rb") as f:
@@ -768,31 +813,31 @@ def add_to_plot(task, jnd, ax, settings, y, cmap):
     ax.scatter(
         mae / dummy,
         y,
-        marker="*",
+        marker=markers["MODNet"],
         c=[DARK2_COLOURS[0]],
         zorder=1e20,
         s=75,
         lw=0.5,
         edgecolor="k",
     )
-    offset_ = 0.1
-    if len(other_methods) % 2 == 1:
-        offset = offset_ * (len(other_methods) + 1) / 2
-    else:
-        offset = offset_ * len(other_methods) / 2
 
-    for method in other_methods:
-        offset -= offset_
-        if np.abs(offset) < 1e-5:
-            offset -= offset_
+    ax.axhline(y, lw=1, ls='--', alpha=0.2,
+        color=DARK2_COLOURS[cmap["MODNet"]],
+    )
+
+    for ind, method in enumerate(other_methods):
+        offset =  - (ind + 1) * offset_
         ax.scatter(
             other_methods[method] / dummy,
             y + offset,
             color=[DARK2_COLOURS[cmap[method]]],
-            marker="*",
-            s=75,
+            marker=markers[method],
+            s=25,
             lw=0.5,
             edgecolor="k",
+        )
+        ax.axhline(y+offset, lw=1, ls='--', alpha=0.2,
+            color=DARK2_COLOURS[cmap[method]],
         )
     return mae / dummy, mins / dummy, maxs / dummy, y
 
@@ -814,7 +859,7 @@ def load_or_featurize(task):
 
 
 if __name__ == "__main__":
-    n_jobs = 40
+    n_jobs = 4
 
     import argparse
 
@@ -827,6 +872,7 @@ if __name__ == "__main__":
 
     if args.get("summary"):
         make_summary_plot()
+        plot_uncertainty_summary()
         exit()
     else:
         arg = args.get("task")
@@ -848,7 +894,7 @@ if __name__ == "__main__":
             data = load_or_featurize(task)
             final_model = EnsembleMODNetModel.load(f"final_model/{task}_model")
             print("Running predictions...")
-            results = run_predict(data, final_model, settings, postprocess=True)
+            results = run_predict(data, final_model, settings)
             print("Saving results...")
             try:
                 save_results(results, task)
@@ -864,7 +910,7 @@ if __name__ == "__main__":
             with open(f"results/{task}_results.pkl", "rb") as f:
                 results = pickle.load(f)
             try:
-                analyse_results(results, settings, post_process=False)
+                analyse_results(results, settings)
             except Exception:
                 print_exc()
 

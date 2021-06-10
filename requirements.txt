@@ -1,3 +1,4 @@
-modnet==0.19
+modnet==0.1.9
 seaborn
 matplotlib
+shapely

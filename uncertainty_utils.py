@@ -48,7 +48,7 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
                     color="blue", alpha=0.2, label="Underconfident")
 
     ax.set_aspect('equal', adjustable='box')
-    buff = 0.01
+    buff = 0
     ax.set_xlim([0 - buff, 1 + buff])
     ax.set_ylim([0 - buff, 1 + buff])
 
@@ -76,7 +76,7 @@ def plot_calibration(y_pred, y_std, y_true, ax, num_bins=200):
         horizontalalignment="right",
     )
 
-    ax.set_xlabel("Theoritical proportion in Gaussian interval")
+    ax.set_xlabel("Theoretical proportion in Gaussian interval")
     ax.set_ylabel("Observed proportion in Gaussian interval")
     ax.legend()
 
@@ -85,7 +85,7 @@ def plot_interval(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_b
     # randomly select 100 samples for better visualization
     #selection = np.random.choice(np.arange(len(y_pred)),100)
     #y_pred, y_std, y_true = y_pred[selection], y_std[selection], y_true[selection]
-    
+
     intervals = num_stds_confidence_bound * y_std
 
     ax.errorbar(
@@ -98,9 +98,10 @@ def plot_interval(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_b
         linewidth=marker_size,
         c="#1f77b4",
         alpha=0.5,
-        zorder=1
+        zorder=1,
+        rasterized=True
     )
-    ax.scatter(y_true, y_pred, s=marker_size, c="tab:blue",zorder=2)
+    ax.scatter(y_true, y_pred, s=marker_size, c="tab:blue",zorder=2, rasterized=True)
 
     # Determine lims
     intervals_lower_upper = [y_pred - intervals, y_pred + intervals]
@@ -115,12 +116,12 @@ def plot_interval(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_b
     name = settings["target_names"][ind]
     ax.set_xlim(lims_ext)
     ax.set_ylim(lims_ext)
-    ax.set_xlabel(f"Target {name} ({settings.get('units','dimensionless')})")
-    ax.set_ylabel(f"Predicted {name} ({settings.get('units','dimensionless')})")
+    ax.set_xlabel(f"Target ({settings.get('units','dimensionless')})")
+    ax.set_ylabel(f"Prediction ({settings.get('units','dimensionless')})")
     ax.set_aspect("equal", "box")
 
 def plot_interval_ordered(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
-    
+
     intervals = num_stds_confidence_bound * y_std
     order = np.argsort(y_true.flatten())
     y_pred, y_std, y_true = y_pred[order], y_std[order], y_true[order]
@@ -136,10 +137,12 @@ def plot_interval_ordered(y_pred, y_std, y_true, ax, settings,ind, num_stds_conf
         c="#1f77b4",
         alpha=0.5,
         ms = marker_size,
-        zorder=1
+        zorder=1,
+        rasterized=True
     )
-    ax.scatter(xs, y_pred, s=marker_size, c="tab:blue", label='Predictions', zorder=2)
+    ax.scatter(xs, y_pred, s=marker_size, c="tab:blue", label='Predictions', zorder=2, rasterized=True)
     ax.plot(xs, y_true, "--", linewidth=marker_size, c=diag_color, label='Target', zorder=3)
+    ax.set_xlim([0,len(y_pred)])
 
     ax.legend()
 
@@ -153,33 +156,61 @@ def plot_interval_ordered(y_pred, y_std, y_true, ax, settings,ind, num_stds_conf
     # Format
     name = settings["target_names"][ind]
     ax.set_ylim(lims_ext)
-    ax.set_xlabel(f"Index ordered by {name} ({settings.get('units','dimensionless')})")
-    ax.set_ylabel(f"Predicted {name} ({settings.get('units','dimensionless')})")
+    ax.set_xlabel(f"Index ordered by target value")
+    ax.set_ylabel(f"Prediction ({settings.get('units','dimensionless')})")
     x0,x1 = ax.get_xlim()
     y0,y1 = ax.get_ylim()
     ax.set_aspect((x1-x0)/(y1-y0))
 
 
-def plot_std(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
+def plot_std(y_pred, y_std, y_true, dknn, ax, settings,ind, num_stds_confidence_bound=2):
 
     error = np.absolute(y_pred-y_true)
     #intervals = num_stds_confidence_bound * y_std
-
     ax.scatter(
-        error,
         y_std,
+        error,
         c="#1f77b4",
         alpha=0.5,
         s=marker_size,
+        rasterized=True
     )
+
+    ax2 = ax.twinx()
+    ax2.scatter(
+        y_std,
+        dknn,
+        c="red",
+        alpha=0.5,
+        s=marker_size,
+        rasterized=True
+    )
+
+    ax2.spines['right'].set_color('red')
+    ax2.tick_params(axis='y', colors='red', labelsize=8)
 
     # Format
     name = settings["target_names"][ind]
-    ax.set_xlabel(f"Absolute error {name} ({settings.get('units','dimensionless')})")
-    ax.set_ylabel("Predicted STD")
-    x0,x1 = ax.get_xlim()
-    y0,y1 = ax.get_ylim()
-    ax.set_aspect((x1-x0)/(y1-y0))
+    ax.set_xlabel(f"Predicted $\\sigma$ ({settings.get('units', 'dimensionless')})")
+    ax.set_ylabel(f"Absolute error ({settings.get('units','dimensionless')})")
+    ax2.set_ylabel("$d_{KNN}$", color="red")
+
+    # _,x1 = ax.get_xlim()
+    # _,y1 = ax.get_ylim()
+    # ax.set_xlim([0,x1])
+    # ax.set_ylim([0,y1])
+    # ax.set_aspect((x1 - 0) / (y1 - 0))
+
+    # _,x1 = ax2.get_xlim()
+    # _,y1 = ax2.get_ylim()
+    # ax2.set_xlim([0,x1])
+    # ax2.set_ylim([0,y1])
+    ax.set_xlim(0)
+    ax.set_ylim(0)
+    ax2.set_ylim(0)
+
+    # ax2.set_aspect((x1-0)/(y1-0))
+
 
 
 def plot_std_by_index(y_pred, y_std, y_true, ax, settings,ind, num_stds_confidence_bound=2):
@@ -200,6 +231,7 @@ def plot_std_by_index(y_pred, y_std, y_true, ax, settings,ind, num_stds_confiden
         linewidth=marker_size,
         c="#1f77b4",
         alpha=0.5,
+        rasterized=True
     )
     ax.plot(xs, error, "o", ms=marker_size, c="#1f77b4")
     #ax.plot(xs, y_true, "--", linewidth=2.0, c=diag_color, label='Target')
@@ -216,20 +248,22 @@ def plot_std_by_index(y_pred, y_std, y_true, ax, settings,ind, num_stds_confiden
     #ax.set_xlim(lims_ext)
     ax.set_ylim(lims_ext)
     ax.set_xlabel(f"Index ordered by error")
-    ax.set_ylabel(f"Error {name} ({settings.get('units','dimensionless')})")
+    ax.set_ylabel(f"Error ({settings.get('units','dimensionless')})")
+    ax.set_xlim([0,len(y_pred)])
     x0,x1 = ax.get_xlim()
     y0,y1 = ax.get_ylim()
     ax.set_aspect((x1-x0)/(y1-y0))
 
 
-def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind):
+def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind, legend=False, yticks=True):
+
+    print("Generating confidence vs error curves...")
 
     error = np.absolute(y_pred-y_true)
     order = np.argsort(y_std.flatten())[::-1]
     std_error = error[order]
 
     perfect_error = np.sort(error)[::-1]
-
 
     np.random.seed(0)
     random_error = np.zeros(shape=(1000,len(error)))
@@ -247,53 +281,70 @@ def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind):
         dknn_error[i] = dknn_error[i:].mean()
         random_mean[i] = random_error[:,i:].mean()
         random_std[i] = random_error[:, i:].mean(axis=1).std()
+    mae = np.mean(random_mean, axis=-1)
 
-    ax.plot(perfect_error, c='tab:green', label='Error ranked')
-    ax.plot(random_mean, c='tab:red', label='Randomly ranked')
-    ax.fill_between(range(len(error)), random_mean-random_std, random_mean+random_std, color='tab:red',alpha=0.5)
-    ax.plot(std_error, c='tab:blue', label='Std ranked')
-    ax.plot(dknn_error, c='tab:orange', label='dKNN ranked')
+    def moving_average(x, w=15):
+        return np.convolve(x, np.ones(w), "valid") / w
 
-    x0,x1 = ax.get_xlim()
-    y0,y1 = ax.get_ylim()
+    percintile = np.linspace(0,100, len(moving_average(error)))
+    lines = []
+    lines.append(ax.plot(percintile, moving_average(perfect_error / mae), c='tab:green', label='Error ranked'))
+    lines.append(ax.plot(percintile, moving_average(random_mean / mae), c='tab:red', label='Randomly ranked'))
+    ax.fill_between(percintile, moving_average(random_mean-random_std) / mae, moving_average(random_mean+random_std) / mae, color='tab:red',alpha=0.2)
+    lines.append(ax.plot(percintile, moving_average(std_error / mae), c='tab:blue', label='$\\sigma$ ranked', ls='--'))
+    lines.append(ax.plot(percintile, moving_average(dknn_error / mae), c='tab:orange', label='$d_\\mathrm{KNN}$ ranked', ls='-.'))
+
+    x0, x1 = 0, 100
+    y0, y1 = 0, 1.2
+    ax.set_xlim((x0, x1))
+    ax.set_ylim((y0, y1))
     ax.set_aspect((x1-x0)/(y1-y0))
-    import matplotlib.ticker as mtick
-    ax.xaxis.set_major_formatter(mtick.PercentFormatter(len(error)))
-    ax.legend(loc='upper left')
+    ax.set_xticks([0, 25, 50, 75, 100])
+    if yticks:
+        ax.set_yticks([0, 0.25, 0.50, 0.75, 1.0])
+    else:
+        ax.set_yticks([])
+
     name = settings["target_names"][ind]
-    ax.set_xlabel("Confidence percentile")
-    ax.set_ylabel(f"MAE {name} ({settings.get('units','dimensionless')})")
+    if legend:
+        ax.legend(loc='lower left')
+        ax.set_xlabel("Confidence percentile")
+        ax.set_ylabel(f"Error relative to MAE")
+    else:
+        ax.text(5, 1.1, name)
+
+    return lines
 
 
 if __name__ == "__main__":
-        # for testing purposes
-        import matplotlib
-        import matplotlib.pyplot as plt
-        DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
-        matplotlib.use("pdf")
-        HEIGHT = 2.5
-        matplotlib.rcParams["font.size"] = 8
-        matplotlib.rcParams["xtick.labelsize"] = 8
-        matplotlib.rcParams["ytick.labelsize"] = 8
+    # for testing purposes
+    import matplotlib
+    import matplotlib.pyplot as plt
+    DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
+    matplotlib.use("pdf")
+    HEIGHT = 2.5
+    matplotlib.rcParams["font.size"] = 8
+    matplotlib.rcParams["xtick.labelsize"] = 8
+    matplotlib.rcParams["ytick.labelsize"] = 8
 
-        print('plotting')
-        fig, axs = plt.subplots(2,3,figsize=(3 * 1.25 * HEIGHT + 0.5, 2 * HEIGHT * 1.25 + 0.5))
-        axs = axs.flatten()
-        y = np.arange(300)
-        preds = y + (np.random.rand(len(y))-0.5)*30
-        unc = np.absolute(preds-y)/3 + np.random.rand(len(y))*3
-        unc[unc.argsort()[-100:]] = unc[unc.argsort()[-100:]]*10
-        dknn = np.absolute(preds-y)/2 + np.random.rand(len(y))*3
+    print('plotting')
+    fig, axs = plt.subplots(2,3,figsize=(3 * 1.25 * HEIGHT + 0.5, 2 * HEIGHT * 1.25 + 0.5))
+    axs = axs.flatten()
+    y = np.arange(300)
+    preds = y + (np.random.rand(len(y))-0.5)*30
+    unc = np.absolute(preds-y)/3 + np.random.rand(len(y))*3
+    unc[unc.argsort()[-100:]] = unc[unc.argsort()[-100:]]*10
+    dknn = np.absolute(preds-y)/2 + np.random.rand(len(y))*3
 
-        settings = {'target_names':['eform'], 'units':'eV'}
+    settings = {'target_names':['eform'], 'units':'eV'}
 
-        plot_calibration(preds, unc, y, axs[0])
-        plot_interval(preds, unc, y, axs[1], settings, 0)
-        plot_interval_ordered(preds, unc, y, axs[2], settings, 0)
-        plot_std(preds, unc, y, axs[3], settings, 0)
-        plot_std_by_index(preds, unc, y, axs[4], settings, 0)
-        plot_ordered_mae(preds, unc, y, dknn, axs[5], settings, 0)
+    plot_calibration(preds, unc, y, axs[0])
+    plot_interval(preds, unc, y, axs[1], settings, 0)
+    plot_interval_ordered(preds, unc, y, axs[2], settings, 0)
+    plot_std(preds, unc, y, axs[3], settings, 0)
+    plot_std_by_index(preds, unc, y, axs[4], settings, 0)
+    plot_ordered_mae(preds, unc, y, dknn, axs[5], settings, 0)
 
-        fig.tight_layout()
-        fig.suptitle('Dummy test plot')
-        fig.savefig('test_fig.pdf')
+    fig.tight_layout()
+    fig.suptitle('Dummy test plot')
+    fig.savefig('test_fig.pdf')
