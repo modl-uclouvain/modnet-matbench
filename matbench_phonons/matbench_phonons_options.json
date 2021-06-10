@@ -1,6 +1,6 @@
 {
     "units": "1/cm",
-    "target_names": ["largest frequency in phonon DOS"],
+    "target_names": ["max. frequency in phonon DOS"],
     "other_methods": [
         {
             "AM": 50.8,

@@ -19,6 +19,7 @@ from pymatgen.core import Composition
 DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
 matplotlib.use("pdf")
 HEIGHT = 2.5
+DPI = 100
 matplotlib.rcParams["font.size"] = 8
 
 STIX = True
@@ -48,7 +49,7 @@ def setup_threading():
     os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
     os.environ["TF_NUM_INTEROP_THREADS"] = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    # import tensorflow as tf 
+    # import tensorflow as tf
     # tf.config.threading.set_intra_op_parallelism_threads(nprocs)
     # tf.config.threading.set_inter_op_parallelism_threads(nthreads)
 
@@ -197,6 +198,8 @@ def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
         model = models[ind]
 
         # compute dkNN
+
+        # TODO: test this quickly before submitting
         max_feat_model = np.argmax([m.n_feat for m in model.model])
         n_feat = model.model[max_feat_model].n_feat
         feature_names = model.model[max_feat_model].optimal_descriptors
@@ -330,7 +333,7 @@ def get_metrics(target, pred, errors, name, settings):
     return metrics
 
 
-def analyse_results(results, settings, post_process=False):
+def analyse_results(results, settings):
 
     target_names = set(c for res in results["targets"] for c in res.columns)
 
@@ -402,7 +405,7 @@ def analyse_results(results, settings, post_process=False):
 def plot_uncertainty_summary():
     from uncertainty_utils import plot_ordered_mae
 
-    fig, ax = plt.subplots(2,3,figsize=(12, 6),sharex=True)
+    fig, ax = plt.subplots(2, 3, figsize=(3 *  HEIGHT, 2 * HEIGHT), sharex=True)
     ax = ax.flatten()
 
     matbench_ordered = [
@@ -430,15 +433,30 @@ def plot_uncertainty_summary():
     for j,(name,target, pred, stds, dknns, ind, settings) in enumerate(all_results):
         if j > 5:
             break
-        plot_ordered_mae(pred, stds, target, dknns, ax[j], settings, ind)
-    fig.savefig("uncertainty_summary_cosine.pdf", dpi=300)
+        yticks = False
+        if j % 3 == 0:
+            yticks = True
+        lines = plot_ordered_mae(pred, stds, target, dknns, ax[j], settings, ind, yticks=yticks)
+
+    labels = ["Error ranked", "Randomly ranked", "$\\sigma$ ranked", "$d_\\mathrm{KNN}$ ranked"]
+
+    plt.legend(
+        [l[0] for l in lines],
+        labels,
+        fancybox=True,
+        ncol=len(lines)
+    )
+    plt.text("Confidence interval", 0.5, 0.9, horizontalalignment="center", transform=fig.transFigure)
+    plt.text("Fraction of MAE", 0.0, 0.5, horizontalalignment="center", rotation="vertical", transform=fig.transFigure)
+    # plt.tight_layout()
+    fig.savefig("uncertainty_summary_cosine.pdf", dpi=DPI)
 
 def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
     from uncertainty_utils import (plot_calibration,
-     plot_interval, plot_interval_ordered,
-     plot_std, plot_std_by_index, plot_ordered_mae)
+        plot_interval, plot_interval_ordered,
+        plot_std, plot_std_by_index, plot_ordered_mae)
 
-    fig, axs = plt.subplots(2, 3, figsize=(3 * 1.25 * HEIGHT + 1.5, 2 * HEIGHT * 1.25 + 0.5))
+    fig, axs = plt.subplots(2, 3, figsize=(3 * HEIGHT, 2 * HEIGHT + 0.5))
     axs = axs.flatten()
 
     plot_calibration(all_pred, all_stds, all_targets, axs[0])
@@ -446,7 +464,7 @@ def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
     plot_interval_ordered(all_pred, all_stds, all_targets, axs[2], settings, ind)
     plot_std(all_pred, all_stds, all_targets, all_dknns, axs[3], settings, ind)
     plot_std_by_index(all_pred, all_stds, all_targets, axs[4], settings, ind)
-    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind)
+    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind, legend=True)
 
     fig.tight_layout()
     name = settings["target_names"][ind]
@@ -456,7 +474,7 @@ def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
         fname = f"plots/{settings['task']}_uncertainty.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_uncertainty.pdf"
-    fig.savefig(fname, dpi=300)
+    fig.savefig(fname, dpi=DPI)
 
 def plot_jointplot(all_targets, all_errors, ind, settings):
     import seaborn as sns
@@ -514,7 +532,7 @@ def plot_jointplot(all_targets, all_errors, ind, settings):
         fname = f"plots/{settings['task']}_jointplot.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_jointplot.pdf"
-    plt.savefig(fname, dpi=300)
+    plt.savefig(fname, dpi=DPI)
 
 
 def plot_scatter(all_targets, all_pred, all_errors, ind, settings, metrics):
@@ -571,7 +589,7 @@ def plot_scatter(all_targets, all_pred, all_errors, ind, settings, metrics):
         fname = f"plots/{settings['task']}_scatter.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_scatter.pdf"
-    plt.savefig(fname, dpi=300)
+    plt.savefig(fname, dpi=DPI)
 
 
 def plot_classifier_roc(all_targets, all_pred, settings):
@@ -619,7 +637,7 @@ def plot_classifier_roc(all_targets, all_pred, settings):
     ax.set_ylabel("Precision")
 
     plt.tight_layout()
-    plt.savefig(f"plots/{settings['task']}_roc.pdf", dpi=300)
+    plt.savefig(f"plots/{settings['task']}_roc.pdf", dpi=DPI)
 
 
 def plot_learning_curves(
@@ -650,7 +668,7 @@ def plot_learning_curves(
     else:
         ax.set_ylabel("Validation loss")
 
-    plt.savefig(f"plots/{settings['task']}_learning_curves.pdf", dpi=300)
+    plt.savefig(f"plots/{settings['task']}_learning_curves.pdf", dpi=DPI)
 
 
 def save_results(results, task: str):
@@ -677,7 +695,7 @@ def make_summary_plot():
 
     # import seaborn as sns # noqa
 
-    fig, ax = plt.subplots(figsize=(4, 3))
+    fig, ax = plt.subplots(figsize=(4, 4))
 
     matbench_ordered = [
         "steels",
@@ -697,12 +715,13 @@ def make_summary_plot():
     mins = []
     maxs = []
 
-    cmap = {"AM": 1, "RF": 2, "MEGNet": 3, "CGCNN": 4}
+    cmap = {"MODNet": 0, "AM": 1, "RF": 2, "MEGNet": 3, "CGCNN": 4}
+    markers = {"MODNet": "*", "AM": "D", "RF": "s", "MEGNet": "^", "CGCNN": "v"}
     for task in matbench_ordered:
         settings = load_settings("matbench_" + task)
         for jnd, name in enumerate(settings["target_names"]):
             mae, min_, max_, y = add_to_plot(
-                task, jnd, ax, settings, name_counter, cmap
+                task, jnd, ax, settings, name_counter, cmap, markers, offset_=0.1,
             )
             name_counter += 1
             names.append(name)
@@ -710,7 +729,6 @@ def make_summary_plot():
             maxs.append(max_)
             mins.append(min_)
             ys.append(y)
-            ax.axhline(y, alpha=0.2, ls="--", lw=1, c="grey")
 
     ax.plot(maes, ys, c=DARK2_COLOURS[0], alpha=0.5, zorder=0)
     ax.fill_betweenx(
@@ -727,9 +745,8 @@ def make_summary_plot():
     xlims = ax.get_xlim()
     ylims = ax.get_ylim()
 
-    marker_style = {"marker": "*", "s": 30, "lw": 0.5, "edgecolor": "k"}
+    marker_style = {"s": 30, "lw": 0.5, "edgecolor": "k"}
 
-    ax.scatter(1e20, 1e20, c=[DARK2_COLOURS[0]], label="MODNet", **marker_style)
     ax.scatter(
         1e20,
         1e20,
@@ -741,7 +758,7 @@ def make_summary_plot():
     )
     for method in cmap:
         ax.scatter(
-            1e20, 1e20, c=[DARK2_COLOURS[cmap[method]]], label=method, **marker_style
+            1e20, 1e20, c=[DARK2_COLOURS[cmap[method]]], label=method, marker=markers[method], **marker_style
         )
     ax.legend(loc="upper right")
 
@@ -751,13 +768,13 @@ def make_summary_plot():
     ax.set_yticks(ys)
 
     names = [
-        "yield strength ($n=312$)",
-        "exfoliation energy ($n=636$)",
-        "refractive index ($n=4764$)",
-        "exp. band gap ($n=4604$)",
-        "$\\log_{10}{K}$ ($n=10987$)",
-        "$\\log_{10}{G}$ ($n=10987$)",
-        "$\\mathrm{argmax}(\\mathrm{PhDOS})$ ($n=1265$)",
+        "yield strength (n=312)",
+        "exfoliation energy (n=636)",
+        "refractive index (n=4764)",
+        "exp. band gap (n=4604)",
+        "$\\log_{10}{K}$ (n=10987)",
+        "$\\log_{10}{G}$ (n=10987)",
+        "$\\mathrm{argmax}(\\mathrm{PhDOS})$ (n=1265)",
     ]
 
     ax.set_yticklabels(names)
@@ -766,10 +783,10 @@ def make_summary_plot():
 
     plt.tight_layout()
 
-    plt.savefig("summary.pdf", dpi=300)
+    plt.savefig("summary.pdf", dpi=DPI)
 
 
-def add_to_plot(task, jnd, ax, settings, y, cmap):
+def add_to_plot(task, jnd, ax, settings, y, cmap, markers, offset_=0.1):
     import pickle
 
     with open(f"matbench_{task}/results/matbench_{task}_results.pkl", "rb") as f:
@@ -796,31 +813,31 @@ def add_to_plot(task, jnd, ax, settings, y, cmap):
     ax.scatter(
         mae / dummy,
         y,
-        marker="*",
+        marker=markers["MODNet"],
         c=[DARK2_COLOURS[0]],
         zorder=1e20,
         s=75,
         lw=0.5,
         edgecolor="k",
     )
-    offset_ = 0.1
-    if len(other_methods) % 2 == 1:
-        offset = offset_ * (len(other_methods) + 1) / 2
-    else:
-        offset = offset_ * len(other_methods) / 2
 
-    for method in other_methods:
-        offset -= offset_
-        if np.abs(offset) < 1e-5:
-            offset -= offset_
+    ax.axhline(y, lw=1, ls='--', alpha=0.2,
+        color=DARK2_COLOURS[cmap["MODNet"]],
+    )
+
+    for ind, method in enumerate(other_methods):
+        offset =  - (ind + 1) * offset_
         ax.scatter(
             other_methods[method] / dummy,
             y + offset,
             color=[DARK2_COLOURS[cmap[method]]],
-            marker="*",
-            s=75,
+            marker=markers[method],
+            s=25,
             lw=0.5,
             edgecolor="k",
+        )
+        ax.axhline(y+offset, lw=1, ls='--', alpha=0.2,
+            color=DARK2_COLOURS[cmap[method]],
         )
     return mae / dummy, mins / dummy, maxs / dummy, y
 
@@ -842,7 +859,7 @@ def load_or_featurize(task):
 
 
 if __name__ == "__main__":
-    n_jobs = 40
+    n_jobs = 4
 
     import argparse
 
@@ -893,7 +910,7 @@ if __name__ == "__main__":
             with open(f"results/{task}_results.pkl", "rb") as f:
                 results = pickle.load(f)
             try:
-                analyse_results(results, settings, post_process=False)
+                analyse_results(results, settings)
             except Exception:
                 print_exc()
 
