@@ -190,7 +190,7 @@ def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
     else:
         results = defaultdict(list)
 
-    for ind, (train, test) in enumerate(matbench_kfold_splits(data)):
+    for ind, (train, test) in enumerate(matbench_kfold_splits(data, classification=settings.get("classification", False))):
         train_data, test_data = data.split((train, test))
         path = "folds/train_moddata_f{}".format(ind + 1)
         train_data = MODData.load(path)
