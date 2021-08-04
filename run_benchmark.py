@@ -143,10 +143,10 @@ def benchmark(data, settings,n_jobs=16, fast=False):
         weights,
         best_settings,
         model_type=EnsembleMODNetModel,
-        n_models = 5,
+        n_models=5,
         classification=settings.get("classification"),
         fast=fast,
-        nested= 0 if fast else 5,
+        nested=0 if fast else 5,
         n_jobs=n_jobs,
     )
 
@@ -868,7 +868,10 @@ if __name__ == "__main__":
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--predict", action="store_true")
     parser.add_argument("--summary", action="store_true")
+    parser.add_argument("--fast", action="store_true", help="Used for running a quick test run with few epochs, no nested CV")
     args = vars(parser.parse_args())
+    
+    fast = args.get("fast", False)
 
     if args.get("summary"):
         make_summary_plot()
@@ -920,7 +923,7 @@ if __name__ == "__main__":
 
         data = load_or_featurize(task)
         setup_threading()
-        results = benchmark(data, settings,n_jobs=n_jobs, fast=False)
+        results = benchmark(data, settings, n_jobs=n_jobs, fast=fast)
         models = results['model']
         inner_models = []
         for model in models:
