@@ -273,12 +273,14 @@ def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind, legend=False
     random_std = np.zeros(len(error))
 
     order = np.argsort(dknn.flatten())[::-1]
-    dknn_error = error[order]
+    if not np.isnan(dknn).any():
+        dknn_error = error[order]
 
     for i in range(len(error)):
         perfect_error[i] = perfect_error[i:].mean()
         std_error[i] = std_error[i:].mean()
-        dknn_error[i] = dknn_error[i:].mean()
+        if not np.isnan(dknn).any():
+            dknn_error[i] = dknn_error[i:].mean()
         random_mean[i] = random_error[:,i:].mean()
         random_std[i] = random_error[:, i:].mean(axis=1).std()
     mae = np.mean(random_mean, axis=-1)
@@ -292,7 +294,8 @@ def plot_ordered_mae(y_pred, y_std, y_true, dknn, ax, settings,ind, legend=False
     lines.append(ax.plot(percintile, moving_average(random_mean / mae), c='tab:red', label='Randomly ranked'))
     ax.fill_between(percintile, moving_average(random_mean-random_std) / mae, moving_average(random_mean+random_std) / mae, color='tab:red',alpha=0.2)
     lines.append(ax.plot(percintile, moving_average(std_error / mae), c='tab:blue', label='$\\sigma$ ranked', ls='--'))
-    lines.append(ax.plot(percintile, moving_average(dknn_error / mae), c='tab:orange', label='$d_\\mathrm{KNN}$ ranked', ls='-.'))
+    if not np.isnan(dknn).any():
+        lines.append(ax.plot(percintile, moving_average(dknn_error / mae), c='tab:orange', label='$d_\\mathrm{KNN}$ ranked', ls='-.'))
 
     x0, x1 = 0, 100
     y0, y1 = 0, 1.2

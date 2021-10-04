@@ -327,6 +327,9 @@ def get_metrics(target, pred, errors, name, settings):
             f"MaxAE = {max_ae:3.3f} {settings.get('units', '')}, slope = {slope:3.2f}, R = {rvalue:3.2f}"
         )
 
+    for k,v in metrics.items():
+        metrics[k] = float(v)
+
     with open(f"results/{name}_metrics.json", "w") as f:
         json.dump(metrics, f)
 
@@ -366,7 +369,10 @@ def analyse_results(results, settings):
                 [res[name].values for res in results["predictions"]]
             ).flatten()
         stds = np.hstack([res[name].values for res in results["stds"]]).flatten()
-        dknns = np.hstack([res[name].values for res in results["dknns"]]).flatten()
+        if "dknns" in results.keys() and results["dknns"]:
+            dknns = np.hstack([res[name].values for res in results["dknns"]]).flatten()
+        else:
+            dknns = np.array([float("nan") for _ in range(len(preds))])
         try:
             errors = np.hstack(
                 [res[name].values for res in results["errors"]]
