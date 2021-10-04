@@ -1,0 +1,9 @@
+{
+    "units": "eV",
+    "target_names": ["gap_pbe"],
+    "other_methods": [{
+        "AM": 0.416,
+        "RF": 0.446,
+        "Dummy": 1.14
+    }]
+}

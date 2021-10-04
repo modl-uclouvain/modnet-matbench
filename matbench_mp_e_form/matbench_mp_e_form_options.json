@@ -1,0 +1,9 @@
+{
+    "units": "eV",
+    "target_names": ["e_form"],
+    "other_methods": [{
+        "AM": 0.920, 
+        "RF": 0.917, 
+        "Dummy": 0.495
+    }]
+}
