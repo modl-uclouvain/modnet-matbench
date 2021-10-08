@@ -3,7 +3,7 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2102.02263-brightgreen)](https://arxiv.org/abs/2102.02263)
 
 
-This repository contains benchmark data for the [MODNet package](https;//github.com/ppdebreuck/modnet) run on [Matbench v0.1]([200~https://hackingmaterials.lbl.gov/automatminer/datasets.html) datasets. 
+This repository contains benchmark data for the [MODNet package](https://github.com/ppdebreuck/modnet) run on [Matbench v0.1]([200~https://hackingmaterials.lbl.gov/automatminer/datasets.html) datasets. 
 Full details can be found in the following papre:
 > *Robust model benchmarking and bias-imbalance in data-driven materials science: a case study on MODNet*  
 > Pierre-Paul De Breuck, Matthew L. Evans, Gian-Marco Rignanese  
