@@ -891,7 +891,9 @@ if __name__ == "__main__":
         arg = args.get("task")
         task = "matbench_" + arg.replace("matbench_", "")
 
-    n_jobs = args.get("n_jobs", 4)
+    n_jobs = args.get("n_jobs")
+    if n_jobs is None:
+        n_jobs = 4
 
     if not os.path.isdir(task):
         raise RuntimeError(f"No folder found for {task!r}.")
