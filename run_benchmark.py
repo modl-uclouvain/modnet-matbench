@@ -95,17 +95,21 @@ def featurize(task, n_jobs=1):
         col for col in df.columns if col not in ("id", "structure", "composition")
     ]
 
+    if "structure" not in df.columns:
+        featurizer = CompositionOnlyFeaturizer()
+    else:
+        featurizer = DeBreuck2020Featurizer(fast_oxid=True)
+
     try:
         materials = df["structure"] if "structure" in df.columns else df["composition"].map(Composition)
     except KeyError:
         raise RuntimeError(f"Could not find any materials data dataset for task {task!r}!")
 
-    fast_oxid_featurizer = DeBreuck2020Featurizer(fast_oxid=True)
     data = MODData(
         materials=materials.tolist(),
         targets=df[targets].values,
         target_names=targets,
-        featurizer=fast_oxid_featurizer,
+        featurizer=featurizer,
     )
     data.featurize(n_jobs=n_jobs)
     data.save(f"./precomputed/{task}_moddata.pkl.gz")
