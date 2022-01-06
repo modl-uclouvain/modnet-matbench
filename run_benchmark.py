@@ -70,7 +70,7 @@ def load_settings(task: str):
     return settings
 
 
-def featurize(task):
+def featurize(task, n_jobs=1):
     import warnings
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -107,12 +107,12 @@ def featurize(task):
         target_names=targets,
         featurizer=fast_oxid_featurizer,
     )
-    data.featurize(n_jobs=32)
+    data.featurize(n_jobs=n_jobs)
     data.save(f"./precomputed/{task}_moddata.pkl.gz")
     return data
 
 
-def benchmark(data, settings,n_jobs=16, fast=False):
+def benchmark(data, settings, n_jobs=16, fast=False):
     from modnet.matbench.benchmark import matbench_benchmark
 
     columns = list(data.df_targets.columns)
@@ -848,10 +848,10 @@ def add_to_plot(task, jnd, ax, settings, y, cmap, markers, offset_=0.1):
     return mae / dummy, mins / dummy, maxs / dummy, y
 
 
-def load_or_featurize(task):
+def load_or_featurize(task, n_jobs=1):
     data_files = glob.glob("./precomputed/*.gz")
     if len(data_files) == 0:
-        data = featurize(task)
+        data = featurize(task, n_jobs=n_jobs)
     else:
         precomputed_moddata = data_files[0]
         if len(data_files) > 1:
@@ -865,7 +865,6 @@ def load_or_featurize(task):
 
 
 if __name__ == "__main__":
-    n_jobs = 4
 
     import argparse
 
@@ -874,9 +873,10 @@ if __name__ == "__main__":
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--predict", action="store_true")
     parser.add_argument("--summary", action="store_true")
+    parser.add_argument("--n_jobs", type=int, help="Number of concurrent processes to use when featurizing/training models")
     parser.add_argument("--fast", action="store_true", help="Used for running a quick test run with few epochs, no nested CV")
     args = vars(parser.parse_args())
-    
+
     fast = args.get("fast", False)
 
     if args.get("summary"):
@@ -886,6 +886,8 @@ if __name__ == "__main__":
     else:
         arg = args.get("task")
         task = "matbench_" + arg.replace("matbench_", "")
+
+    n_jobs = args.get("n_jobs", 4)
 
     if not os.path.isdir(task):
         raise RuntimeError(f"No folder found for {task!r}.")
@@ -927,7 +929,7 @@ if __name__ == "__main__":
         #full run
         print(f"Preparing nested CV run for task {task!r}")
 
-        data = load_or_featurize(task)
+        data = load_or_featurize(task, n_jobs=n_jobs)
         setup_threading()
         results = benchmark(data, settings, n_jobs=n_jobs, fast=fast)
         models = results['model']
