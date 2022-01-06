@@ -112,6 +112,7 @@ def featurize(task, n_jobs=1):
         featurizer=featurizer,
     )
     data.featurize(n_jobs=n_jobs)
+    os.makedirs("./precomputed", exist_ok=True)
     data.save(f"./precomputed/{task}_moddata.pkl.gz")
     return data
 
