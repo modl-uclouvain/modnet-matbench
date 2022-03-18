@@ -1,4 +1,4 @@
-modnet==0.1.11
+modnet==0.1.12
 seaborn
 matplotlib
 shapely
