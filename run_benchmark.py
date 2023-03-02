@@ -15,12 +15,30 @@ from modnet.models import MODNetModel, EnsembleMODNetModel
 from modnet.matbench.benchmark import matbench_kfold_splits
 
 from pymatgen.core import Composition
+from functools import partial
+from modnet.featurizers.presets import (
+    DeBreuck2020Featurizer,
+    CompositionOnlyMatminer2023Featurizer,
+    CompositionOnlyMatminerAll2023Featurizer,
+)
 
 DARK2_COLOURS = plt.cm.get_cmap("Dark2").colors
 matplotlib.use("pdf")
 HEIGHT = 2.5
 DPI = 100
 matplotlib.rcParams["font.size"] = 8
+
+FEATURIZERS = {
+    "DeBreuck2020": partial(DeBreuck2020Featurizer, fast_oxid=True),
+    "CompositionOnlyMatminer2023": CompositionOnlyMatminer2023Featurizer,
+    "CompositionOnlyMatminer2023Continuous": partial(
+        CompositionOnlyMatminer2023Featurizer, continuous_only=True
+    ),
+    "CompositionOnlyMatminerAll2023": CompositionOnlyMatminerAll2023Featurizer,
+    "CompositionOnlyMatminerAll2023Continuous": partial(
+        CompositionOnlyMatminerAll2023Featurizer, continuous_only=True
+    ),
+}
 
 STIX = True
 
@@ -33,7 +51,6 @@ else:
     matplotlib.rcParams["font.family"] = "sans-serif"
     matplotlib.rcParams["font.sans-serif"] = "Arial"
 
-
 # Require these imports for backwards-compat when unpickling
 try:
     from modnet.featurizers.presets import CompositionOnlyFeaturizer  # noqa
@@ -43,8 +60,8 @@ except ImportError:
 
 
 def setup_threading():
-    os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
     os.environ["TF_NUM_INTEROP_THREADS"] = "1"
@@ -70,7 +87,7 @@ def load_settings(task: str):
     return settings
 
 
-def featurize(task, n_jobs=1):
+def featurize(task, featurizer, n_jobs=1):
     import warnings
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -81,7 +98,7 @@ def featurize(task, n_jobs=1):
     if task == "matbench_elastic":
         df_g = load_dataset("matbench_log_gvrh")
         df_k = load_dataset("matbench_log_kvrh")
-        df = df_g.join(df_k.drop("structure",axis=1))
+        df = df_g.join(df_k.drop("structure", axis=1))
     else:
         df = load_dataset(task)
 
@@ -95,16 +112,19 @@ def featurize(task, n_jobs=1):
         col for col in df.columns if col not in ("id", "structure", "composition")
     ]
 
-    if "structure" not in df.columns:
-        featurizer = CompositionOnlyFeaturizer()
-    else:
-        featurizer = DeBreuck2020Featurizer(fast_oxid=True)
-
     try:
-        materials = df["structure"] if "structure" in df.columns else df["composition"].map(Composition)
+        materials = (
+            df["structure"]
+            if "structure" in df.columns
+            else df["composition"].map(Composition)
+        )
     except KeyError:
-        raise RuntimeError(f"Could not find any materials data dataset for task {task!r}!")
+        raise RuntimeError(
+            f"Could not find any materials data dataset for task {task!r}!"
+        )
 
+    featurizer = FEATURIZERS[featurizer]()
+    # fast_oxid_featurizer = DeBreuck2020Featurizer(fast_oxid=True)
     data = MODData(
         materials=materials.tolist(),
         targets=df[targets].values,
@@ -112,8 +132,6 @@ def featurize(task, n_jobs=1):
         featurizer=featurizer,
     )
     data.featurize(n_jobs=n_jobs)
-    os.makedirs("./precomputed", exist_ok=True)
-    data.save(f"./precomputed/{task}_moddata.pkl.gz")
     return data
 
 
@@ -138,22 +156,32 @@ def benchmark(data, settings, n_jobs=16, fast=False):
         "xscale": "minmax",
     }
 
-    #best_settings = None
+    # best_settings = None
     names = [[[field for field in data.df_targets.columns]]]
     weights = {field: 1 for field in data.df_targets.columns}
     from modnet.models import EnsembleMODNetModel
+
     return matbench_benchmark(
         data,
         names,
         weights,
         best_settings,
         model_type=EnsembleMODNetModel,
+        hp_strategy="ga",
+        ga_settings={
+            "size_pop": 20,
+            "num_generations": 10,
+            "early_stopping": 4,
+            "refit": 10,
+        },
         n_models=5,
         classification=settings.get("classification"),
+        use_precomputed_cross_nmi=False,
         fast=fast,
         nested=0 if fast else 5,
         n_jobs=n_jobs,
     )
+
 
 def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
     """
@@ -169,7 +197,9 @@ def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
     task = settings["task"]
     # rebuild the EnsembleMODNetModels from the final model
 
-    n_best_archs = 5 # change this (from 1 to 5 max) to adapt number of inner best archs chosen
+    n_best_archs = (
+        5  # change this (from 1 to 5 max) to adapt number of inner best archs chosen
+    )
 
     bootstrap_size = 5
     outer_fold_size = bootstrap_size * 5 * 5
@@ -178,13 +208,15 @@ def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
 
     multi_target = bool(len(data.df_targets.columns) - 1)
 
-
-    for i in range(5): # outer fold
+    for i in range(5):  # outer fold
         modnet_models = []
-        for j in range(5): # inner fold
-                modnet_models+=(
-                    final_model.model[(i * outer_fold_size) + (j * inner_fold_size):
-                                      (i * outer_fold_size) + (j * inner_fold_size) + (n_best_archs * bootstrap_size)])
+        for j in range(5):  # inner fold
+            modnet_models += final_model.model[
+                (i * outer_fold_size)
+                + (j * inner_fold_size) : (i * outer_fold_size)
+                + (j * inner_fold_size)
+                + (n_best_archs * bootstrap_size)
+            ]
         model = EnsembleMODNetModel(modnet_models=modnet_models)
         models.append(model)
 
@@ -195,11 +227,22 @@ def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
     else:
         results = defaultdict(list)
 
-    for ind, (train, test) in enumerate(matbench_kfold_splits(data, classification=settings.get("classification", False))):
+    for ind, (train, test) in enumerate(
+        matbench_kfold_splits(
+            data, classification=settings.get("classification", False)
+        )
+    ):
         train_data, test_data = data.split((train, test))
         path = "folds/train_moddata_f{}".format(ind + 1)
         train_data = MODData.load(path)
-        assert len(set(train_data.df_targets.index).intersection(set(test_data.df_targets.index))) == 0
+        assert (
+            len(
+                set(train_data.df_targets.index).intersection(
+                    set(test_data.df_targets.index)
+                )
+            )
+            == 0
+        )
         model = models[ind]
 
         # compute dkNN
@@ -261,14 +304,16 @@ def run_predict(data, final_model, settings, save_folds=False, dknn_only=False):
         results["targets"].append(targets)
         results["errors"].append(errors)
         results["scores"].append(score)
-        results['model'].append(model)
+        results["model"].append(model)
 
     return results
 
 
-def get_dknn(train_data, test_data, feature_names, k = 5):
+def get_dknn(train_data, test_data, feature_names, k=5):
 
-    feature_names = list(set(feature_names).intersection(set(train_data.target_nmi.index)))
+    feature_names = list(
+        set(feature_names).intersection(set(train_data.target_nmi.index))
+    )
     x_train = train_data.df_featurized[feature_names].values
     x_test = test_data.df_featurized[feature_names].values
 
@@ -276,20 +321,22 @@ def get_dknn(train_data, test_data, feature_names, k = 5):
     x_train_sc = scaler.fit_transform(x_train)
     x_test_sc = scaler.transform(x_test)
 
-    #weight features
-    #w = (train_data.target_nmi[feature_names].values)**2
-    #x_train_sc = x_train_sc*w
-    #x_test_sc = x_test_sc*w
+    # weight features
+    # w = (train_data.target_nmi[feature_names].values)**2
+    # x_train_sc = x_train_sc*w
+    # x_test_sc = x_test_sc*w
 
-    dist = sklearn.metrics.pairwise_distances(x_test_sc, x_train_sc, metric='cosine')
+    dist = sklearn.metrics.pairwise_distances(x_test_sc, x_train_sc, metric="cosine")
     dknn = np.sort(dist, axis=1)[:, :k].mean(axis=1)
-    dknn = pd.DataFrame({t:dknn for t in train_data.df_targets.columns}, index = test_data.df_featurized.index)
+    dknn = pd.DataFrame(
+        {t: dknn for t in train_data.df_targets.columns},
+        index=test_data.df_featurized.index,
+    )
 
     return dknn
 
 
-
-def get_metrics(target, pred, errors, name, settings):
+def get_metrics(target, pred, name, settings):
     import sklearn.metrics
     import scipy
 
@@ -332,7 +379,7 @@ def get_metrics(target, pred, errors, name, settings):
             f"MaxAE = {max_ae:3.3f} {settings.get('units', '')}, slope = {slope:3.2f}, R = {rvalue:3.2f}"
         )
 
-    for k,v in metrics.items():
+    for k, v in metrics.items():
         metrics[k] = float(v)
 
     with open(f"results/{name}_metrics.json", "w") as f:
@@ -345,15 +392,22 @@ def analyse_results(results, settings):
 
     target_names = set(c for res in results["targets"] for c in res.columns)
 
-    if settings.get("classification", False): # this small parts changes the prediction dataframe from (task_prob_0, task_prob_1) to single column dataframes giving the probability of class 1, with task as column name
+    if settings.get(
+        "classification", False
+    ):  # this small parts changes the prediction dataframe from (task_prob_0, task_prob_1) to single column dataframes giving the probability of class 1, with task as column name
         name = list(target_names)[0]
-        results['predictions'] = [
-            results['predictions'][i].drop(name + '_prob_0', axis=1).rename(columns={name + '_prob_1': name}) for i in
-            range(5)]
-        results['stds'] = [
-            results['stds'][i].drop(name + '_prob_0', axis=1).rename(columns={name + '_prob_1': name}) for i in
-            range(5)]
-
+        results["predictions"] = [
+            results["predictions"][i]
+            .drop(name + "_prob_0", axis=1)
+            .rename(columns={name + "_prob_1": name})
+            for i in range(5)
+        ]
+        results["stds"] = [
+            results["stds"][i]
+            .drop(name + "_prob_0", axis=1)
+            .rename(columns={name + "_prob_1": name})
+            for i in range(5)
+        ]
 
     all_targets = []
     all_preds = []
@@ -402,7 +456,7 @@ def analyse_results(results, settings):
     for ind, (target, pred, stds, dknns, error, name) in enumerate(
         zip(all_targets, all_preds, all_stds, all_dknns, all_errors, target_names)
     ):
-        res.append((name,target, pred, stds, dknns, ind, settings))
+        res.append((name, target, pred, stds, dknns, ind, settings))
         if not settings.get("classification", False):
             # if "nested_learning_curves" in results:
             #     plot_learning_curves(results["nested_learning_curves"], results["best_learning_curves"], settings)
@@ -413,10 +467,11 @@ def analyse_results(results, settings):
             plot_classifier_roc(target, pred, settings)
     return res
 
+
 def plot_uncertainty_summary():
     from uncertainty_utils import plot_ordered_mae
 
-    fig, ax = plt.subplots(2, 3, figsize=(3 *  HEIGHT, 2 * HEIGHT), sharex=True)
+    fig, ax = plt.subplots(2, 3, figsize=(3 * HEIGHT, 2 * HEIGHT), sharex=True)
     ax = ax.flatten()
 
     matbench_ordered = [
@@ -439,33 +494,54 @@ def plot_uncertainty_summary():
         os.chdir(f"matbench_{task}")
         res = analyse_results(results, settings)
         os.chdir("..")
-        all_results+=res
+        all_results += res
 
-    for j,(name,target, pred, stds, dknns, ind, settings) in enumerate(all_results):
+    for j, (name, target, pred, stds, dknns, ind, settings) in enumerate(all_results):
         if j > 5:
             break
         yticks = False
         if j % 3 == 0:
             yticks = True
-        lines = plot_ordered_mae(pred, stds, target, dknns, ax[j], settings, ind, yticks=yticks)
+        lines = plot_ordered_mae(
+            pred, stds, target, dknns, ax[j], settings, ind, yticks=yticks
+        )
 
-    labels = ["Error ranked", "Randomly ranked", "$\\sigma$ ranked", "$d_\\mathrm{KNN}$ ranked"]
+    labels = [
+        "Error ranked",
+        "Randomly ranked",
+        "$\\sigma$ ranked",
+        "$d_\\mathrm{KNN}$ ranked",
+    ]
 
-    plt.legend(
-        [l[0] for l in lines],
-        labels,
-        fancybox=True,
-        ncol=len(lines)
+    plt.legend([l[0] for l in lines], labels, fancybox=True, ncol=len(lines))
+    plt.text(
+        "Confidence interval",
+        0.5,
+        0.9,
+        horizontalalignment="center",
+        transform=fig.transFigure,
     )
-    plt.text("Confidence interval", 0.5, 0.9, horizontalalignment="center", transform=fig.transFigure)
-    plt.text("Fraction of MAE", 0.0, 0.5, horizontalalignment="center", rotation="vertical", transform=fig.transFigure)
+    plt.text(
+        "Fraction of MAE",
+        0.0,
+        0.5,
+        horizontalalignment="center",
+        rotation="vertical",
+        transform=fig.transFigure,
+    )
     # plt.tight_layout()
     fig.savefig("uncertainty_summary_cosine.pdf", dpi=DPI)
 
+
 def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
-    from uncertainty_utils import (plot_calibration,
-        plot_interval, plot_interval_ordered,
-        plot_std, plot_std_by_index, plot_ordered_mae)
+    from uncertainty_utils import (
+        plot_calibration,
+        plot_interval,
+        plot_interval_ordered,
+        plot_std,
+        plot_std_by_index,
+        plot_ordered_mae,
+    )
 
     fig, axs = plt.subplots(2, 3, figsize=(3 * HEIGHT, 2 * HEIGHT + 0.5))
     axs = axs.flatten()
@@ -475,17 +551,20 @@ def plot_uncertainty(all_targets, all_pred, all_stds, all_dknns, ind, settings):
     plot_interval_ordered(all_pred, all_stds, all_targets, axs[2], settings, ind)
     plot_std(all_pred, all_stds, all_targets, all_dknns, axs[3], settings, ind)
     plot_std_by_index(all_pred, all_stds, all_targets, axs[4], settings, ind)
-    plot_ordered_mae(all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind, legend=True)
+    plot_ordered_mae(
+        all_pred, all_stds, all_targets, all_dknns, axs[5], settings, ind, legend=True
+    )
 
     fig.tight_layout()
     name = settings["target_names"][ind]
-    #fig.suptitle(f"{name}")
+    # fig.suptitle(f"{name}")
 
     if len(settings.get("target_names", [])) <= 1:
         fname = f"plots/{settings['task']}_uncertainty.pdf"
     else:
         fname = f"plots/{settings['task']}_{name.replace('$', '').replace('{', '').replace('}', '')}_uncertainty.pdf"
     fig.savefig(fname, dpi=DPI)
+
 
 def plot_jointplot(all_targets, all_errors, ind, settings):
     import seaborn as sns
@@ -682,10 +761,10 @@ def plot_learning_curves(
     plt.savefig(f"plots/{settings['task']}_learning_curves.pdf", dpi=DPI)
 
 
-def save_results(results, task: str):
+def save_results(results, task: str, featurizer):
     os.makedirs("results", exist_ok=True)
 
-    with open(f"results/{task}_results.pkl", "wb") as f:
+    with open(f"results/{task}_{featurizer}_results.pkl", "wb") as f:
         safe_keys = [
             "targets",
             "predictions",
@@ -699,6 +778,10 @@ def save_results(results, task: str):
         pickle.dump({key: results[key] for key in safe_keys}, f)
 
     print("Final score = ", np.mean(results["scores"]))
+
+    preds = np.concatenate(results["predictions"])
+    true = np.concatenate(results["targets"])
+    get_metrics(true, preds, settings=settings, name=task + "_" + featurizer)
 
 
 def make_summary_plot():
@@ -732,7 +815,14 @@ def make_summary_plot():
         settings = load_settings("matbench_" + task)
         for jnd, name in enumerate(settings["target_names"]):
             mae, min_, max_, y = add_to_plot(
-                task, jnd, ax, settings, name_counter, cmap, markers, offset_=0.1,
+                task,
+                jnd,
+                ax,
+                settings,
+                name_counter,
+                cmap,
+                markers,
+                offset_=0.1,
             )
             name_counter += 1
             names.append(name)
@@ -769,7 +859,12 @@ def make_summary_plot():
     )
     for method in cmap:
         ax.scatter(
-            1e20, 1e20, c=[DARK2_COLOURS[cmap[method]]], label=method, marker=markers[method], **marker_style
+            1e20,
+            1e20,
+            c=[DARK2_COLOURS[cmap[method]]],
+            label=method,
+            marker=markers[method],
+            **marker_style,
         )
     ax.legend(loc="upper right")
 
@@ -832,12 +927,16 @@ def add_to_plot(task, jnd, ax, settings, y, cmap, markers, offset_=0.1):
         edgecolor="k",
     )
 
-    ax.axhline(y, lw=1, ls='--', alpha=0.2,
+    ax.axhline(
+        y,
+        lw=1,
+        ls="--",
+        alpha=0.2,
         color=DARK2_COLOURS[cmap["MODNet"]],
     )
 
     for ind, method in enumerate(other_methods):
-        offset =  - (ind + 1) * offset_
+        offset = -(ind + 1) * offset_
         ax.scatter(
             other_methods[method] / dummy,
             y + offset,
@@ -847,25 +946,25 @@ def add_to_plot(task, jnd, ax, settings, y, cmap, markers, offset_=0.1):
             lw=0.5,
             edgecolor="k",
         )
-        ax.axhline(y+offset, lw=1, ls='--', alpha=0.2,
+        ax.axhline(
+            y + offset,
+            lw=1,
+            ls="--",
+            alpha=0.2,
             color=DARK2_COLOURS[cmap[method]],
         )
     return mae / dummy, mins / dummy, maxs / dummy, y
 
 
-def load_or_featurize(task, n_jobs=1):
-    data_files = glob.glob("./precomputed/*.gz")
-    if len(data_files) == 0:
-        data = featurize(task, n_jobs=n_jobs)
-    else:
-        precomputed_moddata = data_files[0]
-        if len(data_files) > 1:
-            print(
-                f"Found multiple data files {data_files}, loading the first {data_files[0]}"
-            )
-
+def load_or_featurize(task, featurizer, n_jobs=1):
+    precomputed_moddata = f"./precomputed/{task}_{featurizer}_moddata.pkl.gz"
+    if os.path.exists(precomputed_moddata):
         data = MODData.load(precomputed_moddata)
-
+    else:
+        data = featurize(task, featurizer, n_jobs=n_jobs)
+        os.makedirs("./precomputed", exist_ok=True)
+        data.save(f"./precomputed/{task}_moddata.pkl.gz")
+        data.save(precomputed_moddata)
     return data
 
 
@@ -875,13 +974,24 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--task")
+
+    parser.add_argument("--featurizer", default="DeBreuck2020")
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--predict", action="store_true")
     parser.add_argument("--summary", action="store_true")
-    parser.add_argument("--n_jobs", type=int, help="Number of concurrent processes to use when featurizing/training models")
-    parser.add_argument("--fast", action="store_true", help="Used for running a quick test run with few epochs, no nested CV")
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=1,
+        help="Number of concurrent processes to use when featurizing/training models",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Used for running a quick test run with few epochs, no nested CV",
+    )
     args = vars(parser.parse_args())
-
+    n_jobs = int(args.get("n_jobs"))
     fast = args.get("fast", False)
 
     if args.get("summary"):
@@ -891,10 +1001,11 @@ if __name__ == "__main__":
     else:
         arg = args.get("task")
         task = "matbench_" + arg.replace("matbench_", "")
-
-    n_jobs = args.get("n_jobs")
-    if n_jobs is None:
-        n_jobs = 4
+        featurizer = args.get("featurizer")
+        if featurizer not in FEATURIZERS.keys():
+            raise RuntimeError(
+                f"Featurizer {featurizer} not recognized. Select from {FEATURIZERS.keys()}."
+            )
 
     if not os.path.isdir(task):
         raise RuntimeError(f"No folder found for {task!r}.")
@@ -906,10 +1017,12 @@ if __name__ == "__main__":
 
     if args.get("predict"):
         if not os.path.isfile(f"final_model/{task}_model"):
-            raise RuntimeError("No model found for prediction, please run the benchmark first.")
+            raise RuntimeError(
+                "No model found for prediction, please run the benchmark first."
+            )
         else:
             print("Loading data and model...")
-            data = load_or_featurize(task)
+            data = load_or_featurize(task, featurizer=featurizer)
             final_model = EnsembleMODNetModel.load(f"final_model/{task}_model")
             print("Running predictions...")
             results = run_predict(data, final_model, settings)
@@ -920,9 +1033,11 @@ if __name__ == "__main__":
                 print_exc()
 
     if args.get("plot"):
-        #make graphs only
+        # make graphs only
         if not os.path.isfile(f"results/{task}_results.pkl"):
-            raise RuntimeError("No results file, please run the benchmark before plotting.")
+            raise RuntimeError(
+                "No results file, please run the benchmark before plotting."
+            )
         else:
             print("Loading previous results.")
             with open(f"results/{task}_results.pkl", "rb") as f:
@@ -933,24 +1048,25 @@ if __name__ == "__main__":
                 print_exc()
 
     if not args.get("plot") and not args.get("predict"):
-        #full run
+        # full run
         print(f"Preparing nested CV run for task {task!r}")
 
-        data = load_or_featurize(task, n_jobs=n_jobs)
+        data = load_or_featurize(task, featurizer=featurizer, n_jobs=n_jobs)
         setup_threading()
-        results = benchmark(data, settings, n_jobs=n_jobs, fast=fast)
-        models = results['model']
+        results = benchmark(data, settings, n_jobs=n_jobs, fast=False)
+        models = results["model"]
         inner_models = []
         for model in models:
             inner_models += model.model
         from modnet.models import EnsembleMODNetModel
+
         final_model = EnsembleMODNetModel(modnet_models=inner_models)
-        if not os.path.exists('final_model'):
-            os.makedirs('final_model')
-        final_model.save(f"final_model/{task}_model")
-        del results['model']
+        if not os.path.exists("final_model"):
+            os.makedirs("final_model")
+        final_model.save(f"final_model/{task}_{featurizer}_model")
+        del results["model"]
         try:
-            save_results(results, task)
+            save_results(results, task, featurizer)
         except Exception:
             print_exc()
 
